@@ -2,28 +2,37 @@ name: Katabump Auto Renew
 
 on:
   schedule:
-  - cron: '0 0 */2 * *'  # 每2天 UTC 0点 (北京时间 8点) 运行,根据服务到期时间自行修改
-  workflow_dispatch: # 允许手动触发
+    - cron: '0 0 */2 * *'  # 每 2 天 UTC 0点 (北京时间 8点) 运行
+  workflow_dispatch:       # 允许手动触发
+
+concurrency:
+  group: katabump-renew
+  cancel-in-progress: true # 避免重复运行导致多点登录
 
 jobs:
   Renew-Katabump:
     runs-on: ubuntu-latest
+    timeout-minutes: 15    # 增加超时限制，防止浏览器卡死耗尽免费额度
     permissions:
       actions: write  
       contents: read
     
     steps:
-    - uses: actions/checkout@v6
+    - name: 📥 检出代码
+      uses: actions/checkout@v4
+      
     - name: ⚙ 设置 Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v5
       with:
         python-version: '3.12'
+        cache: 'pip'       # 开启 pip 缓存，加速后续运行
 
-    - name: 🛠️ 安装系统依赖和python依赖
+    - name: 🛠️ 安装系统与 Python 依赖
       run: |
         sudo apt-get update
         sudo apt-get install -y xvfb x11-utils xdotool scrot fonts-noto-cjk
         pip install seleniumbase requests
+        # SeleniumBase 通常会自管理 driver，手动 install 可作为双保险
         seleniumbase install chromedriver
 
     - name: ⚙ 设置代理 (sing-box)
@@ -31,7 +40,11 @@ jobs:
       env:
         NODE_LINK: ${{ secrets.NODE_LINK }}
       run: |
-        bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+        if [ -n "$NODE_LINK" ]; then
+          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+        else
+          echo "未配置 NODE_LINK，跳过代理设置。"
+        fi
 
     - name: 🚀 运行续期脚本
       env:
@@ -39,9 +52,21 @@ jobs:
         KATABUMP_PASSWORD: ${{ secrets.KATABUMP_PASSWORD }}
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        # 根据节点链接动态决定是否开启 Python 脚本里的代理逻辑
+        IS_PROXY: ${{ secrets.NODE_LINK != '' && 'true' || 'false' }} 
+        # PROXY_SERVER: "http://127.0.0.1:1081" # 若代理脚本使用的非 1081 端口，取消注释并修改
       run: |
         xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
           python3 app.py
+          
+    - name: 📤 收集截图 (Artifacts)
+      if: always() # 无论成功失败，都将本地生成的 png 截图打包上传到 Github 后台
+      uses: actions/upload-artifact@v4
+      with:
+        name: execution-screenshots
+        path: ./*.png
+        if-no-files-found: ignore
+        retention-days: 7
         
     - name: 🧹 清理旧的工作流运行记录
       if: always()
@@ -52,7 +77,8 @@ jobs:
         count=0
         for run_id in $runs; do
           count=$((count + 1))
-          if [ $count -gt 1 ]; then
+          # 建议将 1 改为 5，保留最近 5 次记录以供追溯和对比日志
+          if [ $count -gt 5 ]; then 
             echo "删除运行记录: $run_id"
             gh run delete $run_id || true
           fi
