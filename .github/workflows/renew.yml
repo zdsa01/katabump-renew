@@ -25,7 +25,7 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-        cache: 'pip'       # 开启 pip 缓存，加速后续运行
+       
 
     - name: 🛠️ 安装系统与 Python 依赖
       run: |
