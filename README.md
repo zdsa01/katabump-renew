@@ -1,4 +1,4 @@
-## 🚀 katabump 自动续期（GitHub Actions）
+## 🚀 katabump 自动续期（GitHub Actions）增加TG截图功能
 
 这是一个基于 GitHub Actions 的自动化脚本，用于定时登录自动续期[katabump](https://dashboard.katabump.com) 应用。
 
