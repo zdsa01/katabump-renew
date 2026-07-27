@@ -15,8 +15,8 @@ TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""      # tg通知bot token(可
 
 BASE_URL = "https://dashboard.katabump.com"  # 网站链接
 
-#  Telegram 推送模块
-def send_tg_message(status_icon, status_text, time_left=""):
+#  Telegram 推送模块（支持带截图发送）
+def send_tg_message(status_icon, status_text, time_left="", image_path=None):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("ℹ️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送。")
         return
@@ -33,7 +33,7 @@ def send_tg_message(status_icon, status_text, time_left=""):
         else:
             masked_email = f"{name}@{domain}"
     else:
-        masked_email = EMAIL[:2] + '****'
+        masked_email = EMAIL[:2] + '****' if len(EMAIL) >= 2 else EMAIL
 
     text = (
         f"🇫🇷 katabump 续期通知\n\n"
@@ -41,17 +41,38 @@ def send_tg_message(status_icon, status_text, time_left=""):
         f"👤 续期账户: {masked_email}\n"
         f"⏱️ 续期时间: {current_time_str}"
     )
+    if time_left:
+        text += f"\nℹ️ 详细说明: {time_left}"
 
+    # 1. 优先尝试发送带图消息
+    if image_path and os.path.exists(image_path):
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
+        try:
+            with open(image_path, "rb") as f:
+                r = requests.post(
+                    url,
+                    data={"chat_id": TG_CHAT_ID, "caption": text},
+                    files={"photo": f},
+                    timeout=15
+                )
+            if r.status_code == 200:
+                print(f"📩 Telegram 带图通知发送成功！({image_path})")
+                return
+            else:
+                print(f"⚠️ Telegram 带图发送失败: {r.text}，回退为纯文字发送...")
+        except Exception as e:
+            print(f"⚠️ Telegram 带图发送异常: {e}，回退为纯文字发送...")
+
+    # 2. 回退方案：发送纯文字消息
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TG_CHAT_ID,
         "text": text
     }
-    
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
-            print("📩 Telegram 通知发送成功！")
+            print("📩 Telegram 文字通知发送成功！")
         else:
             print(f"⚠️ Telegram 通知发送失败: {r.text}")
     except Exception as e:
@@ -219,7 +240,6 @@ def handle_turnstile(sb) -> bool:
         time.sleep(0.5)
 
     # 使用 SeleniumBase 内置 uc_gui_click_captcha 处理 Turnstile
-    # 该方法自动完成：检测验证码类型 → 定位 iframe → 计算坐标 → PyAutoGUI 平滑点击
     for attempt in range(6):
         if sb.execute_script(_SOLVED_JS):
             print(f"✅ Turnstile 通过（第 {attempt} 次尝试）")
@@ -265,7 +285,6 @@ def login(sb) -> bool:
     try:
         sb.wait_for_element('input[name="email"]', timeout=15)
     except Exception:
-        # 尝试大写选择器作为后备
         try:
             sb.wait_for_element('input[name="Email"]', timeout=5)
         except Exception:
@@ -275,6 +294,7 @@ def login(sb) -> bool:
             print(f"  当前 URL: {cur_url}")
             print(f"  当前标题: {page_title}")
             sb.save_screenshot("login_load_fail.png")
+            send_tg_message("❌", "登录失败", f"页面未加载出登录表单 ({cur_url})", "login_load_fail.png")
             return False
 
     print("🍪 关闭可能的 Cookie 弹窗...")
@@ -309,6 +329,7 @@ def login(sb) -> bool:
         if not handle_turnstile(sb):
             print("❌ 登录界面的 Turnstile 验证失败")
             sb.save_screenshot("login_turnstile_fail.png")
+            send_tg_message("❌", "登录失败", "Turnstile 验证未通过", "login_turnstile_fail.png")
             return False
     else:
         print("ℹ️ 未检测到 Turnstile")
@@ -321,17 +342,18 @@ def login(sb) -> bool:
         time.sleep(1)
         cur_url = sb.get_current_url().split('?')[0].lower()
         page_title = sb.get_title() or ""
-        if cur_url.startswith(f"{BASE_URL}/dashboard") or "Dashboard | KataBump" in page_title.lower():
+        if cur_url.startswith(f"{BASE_URL}/dashboard") or "dashboard | katabump" in page_title.lower():
             break
 
     cur_url = sb.get_current_url().split('?')[0].lower()
     page_title = sb.get_title() or ""
-    if cur_url.startswith(f"{BASE_URL}/dashboard") or "Dashboard | KataBump" in page_title.lower():
+    if cur_url.startswith(f"{BASE_URL}/dashboard") or "dashboard | katabump" in page_title.lower():
         print(f"✅ 登录成功！(URL: {sb.get_current_url()}, Title: {page_title})")
         return True
         
     print(f"❌ 登录失败，页面未跳转到账户页。(URL: {sb.get_current_url()}, Title: {page_title})")
     sb.save_screenshot("login_failed.png")
+    send_tg_message("❌", "登录失败", f"跳转失败 (URL: {sb.get_current_url()})", "login_failed.png")
     return False
 
 # ===== 自动续期流程 =====
@@ -354,7 +376,8 @@ def _goto_server_detail(sb) -> bool:
     alert_text = _read_alert(sb)
     if alert_text and "can't renew" in alert_text.lower():
         print(f"ℹ️  页面顶部提示: {alert_text}")
-        send_tg_message("ℹ️", "⚠️ 未到续期时间", alert_text)
+        sb.save_screenshot("renew_not_time.png")
+        send_tg_message("⏳", "未到续期时间", alert_text, "renew_not_time.png")
         return False
 
     # 多种选择器尝试查找 See 链接
@@ -387,23 +410,13 @@ def _goto_server_detail(sb) -> bool:
             pass
 
     if see_link is None:
-        # 打印调试信息帮助排查
         cur_url = sb.get_current_url()
         title = sb.get_title() or ""
         print(f"❌ 未找到 'See' 链接")
         print(f"当前 URL: {cur_url}")
         print(f"页面标题: {title}")
-        try:
-            links = sb.find_elements("a")
-            print(f"     页面共 {len(links)} 个链接:")
-            for a in links[:20]:
-                href = a.get_attribute("href") or ""
-                txt  = (a.text or "").strip()[:30]
-                if href:
-                    print(f"       - [{txt}] -> {href}")
-        except Exception:
-            pass
         sb.save_screenshot("servers_page_fail.png")
+        send_tg_message("❌", "未找到服务器列表", f"未找到 See 按钮 ({cur_url})", "servers_page_fail.png")
         return False
 
     print("🖱️  点击 'See' 进入服务器详情页...")
@@ -423,6 +436,8 @@ def _open_renew_modal(sb) -> bool:
             renew_btn = sb.find_element('button.btn.btn-outline-primary', timeout=5)
         except Exception:
             print("  ❌ 未找到 Renew 按钮")
+            sb.save_screenshot("renew_btn_not_found.png")
+            send_tg_message("⚠️", "未找到 Renew 按钮", "服务器详情页未出现 Renew 按钮", "renew_btn_not_found.png")
             return False
 
     sb.execute_script("""
@@ -443,6 +458,7 @@ def _open_renew_modal(sb) -> bool:
         return True
     except Exception:
         print("⚠️ 模态框未弹出")
+        sb.save_screenshot("renew_modal_failed.png")
         return False
 
 
@@ -501,20 +517,17 @@ def _solve_altcha(sb) -> bool:
             (function(){
                 var modal = document.querySelector('div.modal.show');
                 if (!modal) return;
-                // 点击 iframe
                 var iframes = modal.querySelectorAll('iframe');
                 for (var i = 0; i < iframes.length; i++) {
                     iframes[i].click();
                     iframes[i].dispatchEvent(new MouseEvent('click', {bubbles:true}));
                 }
-                // 点击含 checkbox 的 label
                 var labels = modal.querySelectorAll('label');
                 for (var j = 0; j < labels.length; j++) {
                     var txt = (labels[j].textContent || '').toLowerCase();
                     if (txt.includes('robot') || txt.includes('captcha') || txt.includes('verify'))
                         labels[j].click();
                 }
-                // 点击 checkbox
                 var cbs = modal.querySelectorAll('input[type="checkbox"]');
                 for (var k = 0; k < cbs.length; k++) {
                     if (!cbs[k].disabled) {
@@ -533,7 +546,6 @@ def _solve_altcha(sb) -> bool:
                 return True
 
         print(f"  ⚠️ 第 {attempt + 1} 轮未通过，重试...")
-        # 重新获取坐标（iframe 可能已重新渲染）
         try:
             new_coords = sb.execute_script(_ALTCHA_EXPAND_JS)
             if new_coords:
@@ -565,25 +577,29 @@ def _submit_renew(sb):
 
 
 def _check_renew_result(sb):
-    """读取页面 alert 提示，判断续期结果并推送 TG 通知"""
+    """读取页面 alert 提示，判断续期结果并保存截图和推送 TG 通知"""
     print("\n📋 检查续期结果...")
     alert_text = _read_alert(sb)
     if not alert_text:
         time.sleep(3)
         alert_text = _read_alert(sb)
 
+    # 捕获最终结果截图
+    screenshot_file = "renew_result.png"
+    sb.save_screenshot(screenshot_file)
+
     if alert_text:
         print(f"📩 页面提示: {alert_text}")
         low = alert_text.lower()
         if "can't renew" in low or "unable" in low:
-            send_tg_message("⏳", "未到续期时间", alert_text)
-        elif any(kw in low for kw in ( "renewed", "success", "extended")):
-            send_tg_message("✅", "续期成功", alert_text)
+            send_tg_message("⏳", "未到续期时间", alert_text, screenshot_file)
+        elif any(kw in low for kw in ("renewed", "success", "extended")):
+            send_tg_message("✅", "续期成功", alert_text, screenshot_file)
         else:
-            send_tg_message("ℹ️", "续期操作已执行", alert_text)
+            send_tg_message("ℹ️", "续期操作已执行", alert_text, screenshot_file)
     else:
         print("ℹ️ 未检测到明确的提示框，可能续期操作未生效")
-        send_tg_message("ℹ️", "续期操作已执行", "未检测到明确提示")
+        send_tg_message("ℹ️", "续期操作已执行", "未检测到明确提示", screenshot_file)
 
 
 def renew_server(sb):
@@ -624,7 +640,6 @@ def main():
     
     print("🚀 启动浏览器...")
     with SB(**sb_kwargs) as sb:
-        # print("✅ 浏览器已启动")
         try:
             sb.open("https://api.ip.sb/ip")
             print(f"📍  当前出口IP: {sb.get_text('body')}")
@@ -635,7 +650,6 @@ def main():
             renew_server(sb)   # 登录成功后自动续期
         else:
             print("\n❌ 登录失败，终止后续续期操作。")
-            send_tg_message("❌", "登录失败", "未知")
 
 if __name__ == "__main__":
     main()
