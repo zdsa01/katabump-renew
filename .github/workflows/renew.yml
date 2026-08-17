@@ -50,6 +50,7 @@ jobs:
       env:
         KATABUMP_EMAIL: ${{ secrets.KATABUMP_EMAIL }}
         KATABUMP_PASSWORD: ${{ secrets.KATABUMP_PASSWORD }}
+        CONTROL_ID: ${{ secrets.CONTROL_ID }}
         TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         # 根据节点链接动态决定是否开启 Python 脚本里的代理逻辑
