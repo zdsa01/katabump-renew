@@ -629,7 +629,7 @@ def manage_control_panel(sb):
     
             print("🔑 填写密码...")
             js_fill_input(sb, 'input[name="password"]', PASSWORD)
-         time.sleep(8)
+            time.sleep(8)
 
         try:
             # 填入账号 ID：适配主流 Pterodactyl 面板
