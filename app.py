@@ -15,9 +15,9 @@ from seleniumbase import SB
 EMAIL        = os.environ.get("KATABUMP_EMAIL") or ""    
 PASSWORD     = os.environ.get("KATABUMP_PASSWORD") or "" 
 
-# 2. 控制面板 (Control Panel) 账号密码（新增）
+# 2. 控制面板 (Control Panel) 账号密码（修改为 ID + PASSWORD）
 # 如果你的控制面板密码与财务面板不同，请在环境变量中额外配置这两项
-CONTROL_EMAIL    = os.environ.get("CONTROL_EMAIL") or EMAIL       
+CONTROL_ID       = os.environ.get("CONTROL_ID") or ""       # 使用 ID 登录
 CONTROL_PASSWORD = os.environ.get("CONTROL_PASSWORD") or PASSWORD 
 
 # 3. TG 推送配置
@@ -37,15 +37,16 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
     local_time = time.gmtime(time.time() + 8 * 3600)
     current_time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
-    # 邮箱脱敏：保留用户名前2位和后2位，中间用****代替
-    if '@' in target_email:
+    # 账号脱敏：兼容邮箱和纯ID
+    if target_email and '@' in target_email:
         name, domain = target_email.split('@', 1)
         if len(name) > 4:
             masked_email = f"{name[:2]}****{name[-2:]}@{domain}"
         else:
             masked_email = f"{name}@{domain}"
     else:
-        masked_email = target_email[:2] + '****' if len(target_email) >= 2 else target_email
+        # 如果是纯 ID 登录
+        masked_email = target_email[:2] + '****' if target_email and len(target_email) >= 2 else target_email
 
     text = (
         f"🇫🇷 katabump 通知\n\n"
@@ -617,20 +618,28 @@ def manage_control_panel(sb):
     time.sleep(6)
 
     current_url = sb.get_current_url().lower()
+    
+    # 获取准备使用的 ID
+    login_id = CONTROL_ID if CONTROL_ID else EMAIL
+    
     if "/auth/login" in current_url:
-        print(f"🔑 控制面板需要登录，尝试填入专属账号: {CONTROL_EMAIL} ...")
+        print(f"🔑 控制面板需要登录，尝试填入专属账号 ID: {login_id} ...")
+        
+        if not CONTROL_ID:
+            print("⚠️ 未配置 CONTROL_ID 环境变量，使用注册 EMAIL 作为兜底尝试...")
+
         try:
-            # 填入账号：使用新的环境变量 CONTROL_EMAIL
+            # 填入账号 ID：适配主流 Pterodactyl 面板
             if sb.is_element_present('input[name="user"]'):
-                sb.type('input[name="user"]', CONTROL_EMAIL)
-            elif sb.is_element_present('input[name="email"]'):
-                sb.type('input[name="email"]', CONTROL_EMAIL)
+                sb.type('input[name="user"]', login_id)
+            elif sb.is_element_present('input[name="username"]'):
+                sb.type('input[name="username"]', login_id)
             elif sb.is_element_present('input[type="text"]'):
-                sb.type('input[type="text"]', CONTROL_EMAIL)
+                sb.type('input[type="text"]', login_id)
                 
             time.sleep(0.5)
             
-            # 填入密码：使用新的环境变量 CONTROL_PASSWORD
+            # 填入密码
             if sb.is_element_present('input[name="password"]'):
                 sb.type('input[name="password"]', CONTROL_PASSWORD)
             elif sb.is_element_present('input[type="password"]'):
@@ -660,10 +669,10 @@ def manage_control_panel(sb):
                     break
             
             if not login_success:
-                print("❌ 控制面板登录失败，页面未跳转。请检查 CONTROL_EMAIL 和 CONTROL_PASSWORD。")
+                print("❌ 控制面板登录失败，页面未跳转。请检查 CONTROL_ID 和 CONTROL_PASSWORD。")
                 sb.save_screenshot("control_login_fail.png")
-                # 推送时附带控制面板的邮箱，方便核实
-                send_tg_message("❌", "面板登录失败", "控制面板账号密码不匹配或遇到二次验证", "control_login_fail.png", target_email=CONTROL_EMAIL)
+                # 推送时附带控制面板的 ID，方便核实
+                send_tg_message("❌", "面板登录失败", "控制面板账号密码不匹配或遇到二次验证", "control_login_fail.png", target_email=login_id)
                 return
         except Exception as e:
             print(f"⚠️ 控制面板登录过程异常: {e}")
@@ -685,10 +694,10 @@ def manage_control_panel(sb):
             print("✅ 已点击【启动】按钮")
             time.sleep(3)
             sb.save_screenshot("server_started.png")
-            send_tg_message("🚀", "服务器已启动", f"检测到服务器离线，已执行开机操作。\n面板: {CONTROL_URL}", "server_started.png", target_email=CONTROL_EMAIL)
+            send_tg_message("🚀", "服务器已启动", f"检测到服务器离线，已执行开机操作。\n面板: {CONTROL_URL}", "server_started.png", target_email=login_id)
         except Exception as e:
             print(f"⚠️ 无法找到启动按钮: {e}")
-            send_tg_message("⚠️", "启动服务器失败", "在控制面板未找到Start/启动按钮", screenshot_file, target_email=CONTROL_EMAIL)
+            send_tg_message("⚠️", "启动服务器失败", "在控制面板未找到Start/启动按钮", screenshot_file, target_email=login_id)
     else:
         print("🟢 服务器当前处于【运行】状态，准备重启...")
         try:
@@ -696,10 +705,10 @@ def manage_control_panel(sb):
             print("✅ 已点击【重启】按钮")
             time.sleep(3)
             sb.save_screenshot("server_restarted.png")
-            send_tg_message("🔄", "服务器已重启", f"服务器当前在线，已执行重启操作。\n面板: {CONTROL_URL}", "server_restarted.png", target_email=CONTROL_EMAIL)
+            send_tg_message("🔄", "服务器已重启", f"服务器当前在线，已执行重启操作。\n面板: {CONTROL_URL}", "server_restarted.png", target_email=login_id)
         except Exception as e:
             print(f"⚠️ 无法找到重启按钮: {e}")
-            send_tg_message("⚠️", "重启服务器失败", "在控制面板未找到Restart/重启按钮", screenshot_file, target_email=CONTROL_EMAIL)
+            send_tg_message("⚠️", "重启服务器失败", "在控制面板未找到Restart/重启按钮", screenshot_file, target_email=login_id)
 
 
 #  脚本执行入口 
