@@ -640,19 +640,21 @@ def manage_control_panel(sb):
     if "/auth/login" in current_url:
         print("🔑 控制面板需要登录，尝试自动填入账号密码...")
         try:
-            # 填入账号 (支持常见的 Pterodactyl 标识名)
+            # 【修改点1】：改用 sb.type() 模拟真实按键，确保 React 能够正确捕获状态更新
             if sb.is_element_present('input[name="user"]'):
-                js_fill_input(sb, 'input[name="user"]', EMAIL)
+                sb.type('input[name="user"]', EMAIL)
             elif sb.is_element_present('input[name="email"]'):
-                js_fill_input(sb, 'input[name="email"]', EMAIL)
+                sb.type('input[name="email"]', EMAIL)
             elif sb.is_element_present('input[type="text"]'):
-                js_fill_input(sb, 'input[type="text"]', EMAIL)
+                sb.type('input[type="text"]', EMAIL)
                 
+            time.sleep(0.5)
+            
             # 填入密码
             if sb.is_element_present('input[name="password"]'):
-                js_fill_input(sb, 'input[name="password"]', PASSWORD)
+                sb.type('input[name="password"]', PASSWORD)
             elif sb.is_element_present('input[type="password"]'):
-                js_fill_input(sb, 'input[type="password"]', PASSWORD)
+                sb.type('input[type="password"]', PASSWORD)
             
             time.sleep(1)
             
@@ -661,14 +663,25 @@ def manage_control_panel(sb):
                 print("🔍 控制面板登录页检测到 Turnstile, 尝试处理...")
                 handle_turnstile(sb)
             
-            # 提交表单
+            # 【修改点2】：优先寻找 submit 类型的登录按钮进行点击，而不是完全依赖回车键
             print("🖱️ 提交登录信息...")
-            sb.press_keys('input[type="password"]', '\n')
+            try:
+                sb.click('button[type="submit"]', timeout=3)
+            except Exception:
+                # 如果没找到标准 submit 按钮，再回退到敲击回车
+                sb.press_keys('input[type="password"]', '\n')
             
+            # 【修改点3】：动态检测 URL 变化，提高自动化流水线的稳定性和执行效率
             print("⏳ 等待控制面板登录跳转...")
-            time.sleep(8)
+            login_success = False
+            for i in range(15):
+                time.sleep(1)
+                if "/auth/login" not in sb.get_current_url().lower():
+                    login_success = True
+                    print(f"✅ 登录成功，页面已跳转 (耗时 {i+1}s)")
+                    break
             
-            if "/auth/login" in sb.get_current_url().lower():
+            if not login_success:
                 print("❌ 控制面板登录失败，页面未跳转。可能是账号密码不互通。")
                 sb.save_screenshot("control_login_fail.png")
                 send_tg_message("❌", "面板登录失败", "控制面板账号密码不匹配或遇到二次验证", "control_login_fail.png")
@@ -711,7 +724,6 @@ def manage_control_panel(sb):
         except Exception as e:
             print(f"⚠️ 无法找到重启按钮: {e}")
             send_tg_message("⚠️", "重启服务器失败", "在控制面板未找到Restart/重启按钮", screenshot_file)
-
 
 #  脚本执行入口 (可选代理)
 def main():
