@@ -625,14 +625,11 @@ def manage_control_panel(sb):
     if "/auth/login" in current_url:
             print(f"📧 填写ID...")
             js_fill_input(sb, 'input[name="CONTROL_ID"]', EMAIL)
-            time.sleep(0.3)
+            time.sleep(7)
     
             print("🔑 填写密码...")
             js_fill_input(sb, 'input[name="password"]', PASSWORD)
-         time.sleep(1)
-        
-        if not CONTROL_ID:
-            print("⚠️ 未配置 CONTROL_ID 环境变量，使用注册 EMAIL 作为兜底尝试...")
+         time.sleep(8)
 
         try:
             # 填入账号 ID：适配主流 Pterodactyl 面板
