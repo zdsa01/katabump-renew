@@ -623,7 +623,13 @@ def manage_control_panel(sb):
     login_id = CONTROL_ID if CONTROL_ID else EMAIL
     
     if "/auth/login" in current_url:
-        print(f"🔑 控制面板需要登录，尝试填入专属账号 ID: {login_id} ...")
+            print(f"📧 填写ID...")
+            js_fill_input(sb, 'input[name="CONTROL_ID"]', EMAIL)
+            time.sleep(0.3)
+    
+            print("🔑 填写密码...")
+            js_fill_input(sb, 'input[name="password"]', PASSWORD)
+         time.sleep(1)
         
         if not CONTROL_ID:
             print("⚠️ 未配置 CONTROL_ID 环境变量，使用注册 EMAIL 作为兜底尝试...")
