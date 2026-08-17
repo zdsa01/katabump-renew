@@ -1,4 +1,4 @@
-## 🚀 katabump 自动续期（GitHub Actions）增加TG截图功能
+## 🚀 katabump 自动续期（GitHub Actions）增加TG截图功能，增加重启和检测离线自动启动
 
 这是一个基于 GitHub Actions 的自动化脚本，用于定时登录自动续期[katabump](https://dashboard.katabump.com) 应用。
 
@@ -12,6 +12,7 @@
 |---------------------|----------|---------------------------------------------------|
 | KATABUMP_EMAIL     | ✅ 必填  | katabump 登录邮箱                                    |
 | KATABUMP_PASSWORD  | ✅ 必填  | katabump 登录密码                                    | 
+| CONTROL_ID  | ✅ 必填  | control 登录ID:Identifier                                    | 
 | NODE_LINK          | ❌ 可选  | 代理链接，如 vless:// vmess:// tuic:// hysteria2:// anttls:// socks5://|
 | TG_BOT_TOKEN       | ❌ 可选  | Telegram Bot Token（用于发送通知）                     |
 | TG_CHAT_ID         | ❌ 可选  | Telegram Chat ID（接收通知的用户或群组 ID）              |
