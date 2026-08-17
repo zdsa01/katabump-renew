@@ -14,6 +14,7 @@ TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""        # tg通知 chat id(可�
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""      # tg通知bot token(可选)
 
 BASE_URL = "https://dashboard.katabump.com"  # 网站链接
+CONTROL_URL = "https://control.katabump.com/server/3c771e38" # 目标控制面板服务器链接
 
 #  Telegram 推送模块（支持带截图发送）
 def send_tg_message(status_icon, status_text, time_left="", image_path=None):
@@ -36,10 +37,10 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None):
         masked_email = EMAIL[:2] + '****' if len(EMAIL) >= 2 else EMAIL
 
     text = (
-        f"🇫🇷 katabump 续期通知\n\n"
+        f"🇫🇷 katabump 通知\n\n"
         f"{status_icon} {status_text}\n"
-        f"👤 续期账户: {masked_email}\n"
-        f"⏱️ 续期时间: {current_time_str}"
+        f"👤 账户: {masked_email}\n"
+        f"⏱️ 时间: {current_time_str}"
     )
     if time_left:
         text += f"\nℹ️ 详细说明: {time_left}"
@@ -622,10 +623,100 @@ def renew_server(sb):
     _check_renew_result(sb)
 
 
+# ===== 控制面板运行状态管理 =====
+
+def manage_control_panel(sb):
+    """检查控制面板的运行状态，离线则启动，在线则重启"""
+    print(f"\n" + "#" * 25)
+    print(f"  开始管理控制面板: {CONTROL_URL}")
+    print("#" * 25)
+
+    print("🌐 打开控制面板...")
+    sb.uc_open_with_reconnect(CONTROL_URL, reconnect_time=8)
+    time.sleep(6)
+
+    # 检查是否跳转到了登录页面 (如 Pterodactyl 的 /auth/login)
+    current_url = sb.get_current_url().lower()
+    if "/auth/login" in current_url:
+        print("🔑 控制面板需要登录，尝试自动填入账号密码...")
+        try:
+            # 填入账号 (支持常见的 Pterodactyl 标识名)
+            if sb.is_element_present('input[name="user"]'):
+                js_fill_input(sb, 'input[name="user"]', EMAIL)
+            elif sb.is_element_present('input[name="email"]'):
+                js_fill_input(sb, 'input[name="email"]', EMAIL)
+            elif sb.is_element_present('input[type="text"]'):
+                js_fill_input(sb, 'input[type="text"]', EMAIL)
+                
+            # 填入密码
+            if sb.is_element_present('input[name="password"]'):
+                js_fill_input(sb, 'input[name="password"]', PASSWORD)
+            elif sb.is_element_present('input[type="password"]'):
+                js_fill_input(sb, 'input[type="password"]', PASSWORD)
+            
+            time.sleep(1)
+            
+            # 部分控制面板登录带有 Turnstile 人机验证
+            if sb.execute_script(_EXISTS_JS):
+                print("🔍 控制面板登录页检测到 Turnstile, 尝试处理...")
+                handle_turnstile(sb)
+            
+            # 提交表单
+            print("🖱️ 提交登录信息...")
+            sb.press_keys('input[type="password"]', '\n')
+            
+            print("⏳ 等待控制面板登录跳转...")
+            time.sleep(8)
+            
+            if "/auth/login" in sb.get_current_url().lower():
+                print("❌ 控制面板登录失败，页面未跳转。可能是账号密码不互通。")
+                sb.save_screenshot("control_login_fail.png")
+                send_tg_message("❌", "面板登录失败", "控制面板账号密码不匹配或遇到二次验证", "control_login_fail.png")
+                return
+        except Exception as e:
+            print(f"⚠️ 控制面板登录过程异常: {e}")
+            return
+
+    print("⏳ 检查服务器当前状态...")
+    time.sleep(8) # 留足时间给控制面板加载 Websocket 和状态
+    
+    # 提取页面所有的文本来判断状态 (中英文兼容)
+    page_text = sb.get_text("body").lower()
+    screenshot_file = "server_status.png"
+    sb.save_screenshot(screenshot_file)
+
+    is_offline = "offline" in page_text or "离线" in page_text
+    
+    if is_offline:
+        print("💤 服务器当前处于【离线】状态，准备启动...")
+        try:
+            # Pterodactyl 面板的启动按钮，通常文本是 Start/启动，或者带有特定属性
+            sb.click('button:contains("Start"), button:contains("启动"), button[data-action="start"]', timeout=5)
+            print("✅ 已点击【启动】按钮")
+            time.sleep(3)
+            sb.save_screenshot("server_started.png")
+            send_tg_message("🚀", "服务器已启动", f"检测到服务器离线，已执行开机操作。\n面板: {CONTROL_URL}", "server_started.png")
+        except Exception as e:
+            print(f"⚠️ 无法找到启动按钮: {e}")
+            send_tg_message("⚠️", "启动服务器失败", "在控制面板未找到Start/启动按钮", screenshot_file)
+    else:
+        # 如果不是明确的 Offline 状态，则均视为在线进行重启
+        print("🟢 服务器当前处于【运行】状态，准备重启...")
+        try:
+            sb.click('button:contains("Restart"), button:contains("重启"), button[data-action="restart"]', timeout=5)
+            print("✅ 已点击【重启】按钮")
+            time.sleep(3)
+            sb.save_screenshot("server_restarted.png")
+            send_tg_message("🔄", "服务器已重启", f"服务器当前在线，已执行重启操作。\n面板: {CONTROL_URL}", "server_restarted.png")
+        except Exception as e:
+            print(f"⚠️ 无法找到重启按钮: {e}")
+            send_tg_message("⚠️", "重启服务器失败", "在控制面板未找到Restart/重启按钮", screenshot_file)
+
+
 #  脚本执行入口 (可选代理)
 def main():
     print("#" * 25)
-    print("   katabump 自动登录续期")
+    print("   katabump 自动登录续期与管理")
     print("#" * 25)
 
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
@@ -647,9 +738,13 @@ def main():
             pass
 
         if login(sb):
-            renew_server(sb)   # 登录成功后自动续期
+            # 第一步：执行控制台自动续期
+            renew_server(sb)   
+            
+            # 第二步：进入翼龙面板执行状态监控和启动/重启
+            manage_control_panel(sb)
         else:
-            print("\n❌ 登录失败，终止后续续期操作。")
+            print("\n❌ 登录失败，终止后续续期及控制面板操作。")
 
 if __name__ == "__main__":
     main()
