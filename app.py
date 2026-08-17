@@ -15,10 +15,10 @@ from seleniumbase import SB
 EMAIL        = os.environ.get("KATABUMP_EMAIL") or ""    
 PASSWORD     = os.environ.get("KATABUMP_PASSWORD") or "" 
 
-# 2. 控制面板 (Control Panel) 账号密码（修改为 ID + PASSWORD）
-# 如果你的控制面板密码与财务面板不同，请在环境变量中额外配置这两项
-CONTROL_ID       = os.environ.get("CONTROL_ID") or ""       # 使用 ID 登录
-CONTROL_PASSWORD = os.environ.get("CONTROL_PASSWORD") or PASSWORD 
+# 2. 控制面板 (Control Panel) 账号密码 
+# (强制修改：取消了对 EMAIL/PASSWORD 的兜底，严格只用这两项登录)
+CONTROL_ID       = os.environ.get("CONTROL_ID") or ""       
+CONTROL_PASSWORD = os.environ.get("CONTROL_PASSWORD") or "" 
 
 # 3. TG 推送配置
 TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""        
@@ -35,11 +35,9 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
         print("ℹ️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送。")
         return
 
-    # 获取北京时间 (UTC+8)
     local_time = time.gmtime(time.time() + 8 * 3600)
     current_time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
-    # 账号脱敏：兼容邮箱和纯ID
     if target_email and '@' in target_email:
         name, domain = target_email.split('@', 1)
         if len(name) > 4:
@@ -47,7 +45,6 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
         else:
             masked_email = f"{name}@{domain}"
     else:
-        # 如果是纯 ID 登录
         masked_email = target_email[:2] + '****' if target_email and len(target_email) >= 2 else target_email
 
     text = (
@@ -59,31 +56,23 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
     if time_left:
         text += f"\nℹ️ 详细说明: {time_left}"
 
-    # 1. 优先尝试发送带图消息
     if image_path and os.path.exists(image_path):
         url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
         try:
             with open(image_path, "rb") as f:
                 r = requests.post(
-                    url,
-                    data={"chat_id": TG_CHAT_ID, "caption": text},
-                    files={"photo": f},
-                    timeout=15
+                    url, data={"chat_id": TG_CHAT_ID, "caption": text}, files={"photo": f}, timeout=15
                 )
             if r.status_code == 200:
                 print(f"📩 Telegram 带图通知发送成功！({image_path})")
                 return
             else:
-                print(f"⚠️ Telegram 带图发送失败: {r.text}，回退为纯文字发送...")
+                print(f"⚠️ Telegram 带图发送失败: {r.text}，回退为纯文字...")
         except Exception as e:
-            print(f"⚠️ Telegram 带图发送异常: {e}，回退为纯文字发送...")
+            print(f"⚠️ Telegram 带图发送异常: {e}，回退为纯文字...")
 
-    # 2. 回退方案：发送纯文字消息
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TG_CHAT_ID,
-        "text": text
-    }
+    payload = {"chat_id": TG_CHAT_ID, "text": text}
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
@@ -194,7 +183,6 @@ _ALTCHA_SOLVED_JS = """
 # 辅助函数
 # ==========================================
 def js_fill_input(sb, selector: str, text: str):
-    """通过原生 JS 触发 React/Vue 数据绑定的输入方法"""
     safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
     sb.execute_script(f"""
     (function(){{
@@ -288,8 +276,6 @@ def login(sb) -> bool:
             print(f"✅ Cloudflare 验证已通过（{i+1}s）")
             break
         time.sleep(1)
-    if not cf_passed:
-        print("⚠️ Cloudflare 验证可能未通过，继续尝试...")
 
     try:
         sb.wait_for_element('input[name="email"]', timeout=15)
@@ -298,15 +284,10 @@ def login(sb) -> bool:
             sb.wait_for_element('input[name="Email"]', timeout=5)
         except Exception:
             print("❌ 页面未加载出登录表单")
-            cur_url = sb.get_current_url()
-            page_title = sb.get_title() or ""
-            print(f"   当前 URL: {cur_url}")
-            print(f"   当前标题: {page_title}")
             sb.save_screenshot("login_load_fail.png")
-            send_tg_message("❌", "登录失败", f"页面未加载出登录表单 ({cur_url})", "login_load_fail.png", EMAIL)
+            send_tg_message("❌", "登录失败", "页面未加载出登录表单", "login_load_fail.png", EMAIL)
             return False
 
-    print("🍪 关闭可能的 Cookie 弹窗...")
     try:
         for btn in sb.find_elements("button"):
             if "Accept" in (btn.text or ""):
@@ -324,7 +305,6 @@ def login(sb) -> bool:
     js_fill_input(sb, 'input[name="password"]', PASSWORD)
     time.sleep(1)
 
-    print("⏳ 等待 Turnstile 验证框出现...")
     ts_found = False
     for i in range(10):
         if sb.execute_script(_EXISTS_JS):
@@ -339,8 +319,6 @@ def login(sb) -> bool:
             sb.save_screenshot("login_turnstile_fail.png")
             send_tg_message("❌", "登录失败", "Turnstile 验证未通过", "login_turnstile_fail.png", EMAIL)
             return False
-    else:
-        print("ℹ️ 未检测到 Turnstile")
 
     print("🖱️ 敲击回车提交表单...")
     sb.press_keys('input[name="password"]', '\n')
@@ -349,17 +327,15 @@ def login(sb) -> bool:
     for _ in range(12):
         time.sleep(1)
         cur_url = sb.get_current_url().split('?')[0].lower()
-        page_title = sb.get_title() or ""
-        if cur_url.startswith(f"{BASE_URL}/dashboard") or "dashboard | katabump" in page_title.lower():
+        if cur_url.startswith(f"{BASE_URL}/dashboard"):
             break
 
     cur_url = sb.get_current_url().split('?')[0].lower()
-    page_title = sb.get_title() or ""
-    if cur_url.startswith(f"{BASE_URL}/dashboard") or "dashboard | katabump" in page_title.lower():
-        print(f"✅ 登录成功！(URL: {sb.get_current_url()}, Title: {page_title})")
+    if cur_url.startswith(f"{BASE_URL}/dashboard"):
+        print("✅ 登录成功！")
         return True
         
-    print(f"❌ 登录失败，页面未跳转到账户页。(URL: {sb.get_current_url()}, Title: {page_title})")
+    print("❌ 登录失败，页面未跳转到账户页。")
     sb.save_screenshot("login_failed.png")
     send_tg_message("❌", "登录失败", f"跳转失败 (URL: {sb.get_current_url()})", "login_failed.png", EMAIL)
     return False
@@ -393,18 +369,15 @@ def _goto_server_detail(sb) -> bool:
     for sel in selectors:
         try:
             see_link = sb.find_element(sel, timeout=8)
-            print(f"✅ 通过选择器找到链接: {sel}")
             break
         except Exception:
             continue
 
     if see_link is None:
-        print("⚠️ 选择器未命中，尝试文本匹配...")
         try:
             for a in sb.find_elements("a"):
                 if (a.text or "").strip().lower() == "see":
                     see_link = a
-                    print("✅ 通过文本 'See' 找到链接")
                     break
         except Exception:
             pass
@@ -416,10 +389,8 @@ def _goto_server_detail(sb) -> bool:
         send_tg_message("❌", "未找到服务器列表", f"未找到 See 按钮 ({cur_url})", "servers_page_fail.png", EMAIL)
         return False
 
-    print("🖱️ 点击 'See' 进入服务器详情页...")
     see_link.click()
     time.sleep(5)
-    print(f"📄 当前页面: {sb.get_current_url()}")
     return True
 
 def _open_renew_modal(sb) -> bool:
@@ -444,15 +415,12 @@ def _open_renew_modal(sb) -> bool:
     """)
     time.sleep(0.8)
     renew_btn.click()
-    print("🖱️ 已点击 Renew 按钮，等待 ALTCHA 验证框...")
     time.sleep(3)
 
     try:
         sb.find_element('div.modal.show', timeout=5)
-        print("✅ Renew 模态框已弹出")
         return True
     except Exception:
-        print("⚠️ 模态框未弹出")
         sb.save_screenshot("renew_modal_failed.png")
         return False
 
@@ -461,44 +429,31 @@ def _solve_altcha(sb) -> bool:
     time.sleep(2)
 
     if sb.execute_script(_ALTCHA_SOLVED_JS):
-        print("✅ ALTCHA 已自动通过")
         return True
 
     coords = None
     try:
         coords = sb.execute_script(_ALTCHA_EXPAND_JS)
-    except Exception:
-        pass
-
-    if coords:
-        print(f"   📍 找到模态框内 iframe 坐标: ({coords['cx']}, {coords['cy']})")
+    except Exception: pass
 
     for attempt in range(3):
         if sb.execute_script(_ALTCHA_SOLVED_JS):
-            print(f"✅ ALTCHA 验证通过（第 {attempt + 1} 轮）")
             return True
 
         if coords:
-            try:
-                wi = sb.execute_script(_WININFO_JS)
-            except Exception:
-                wi = {"sx": 0, "sy": 0, "oh": 800, "ih": 768}
+            try: wi = sb.execute_script(_WININFO_JS)
+            except Exception: wi = {"sx": 0, "sy": 0, "oh": 800, "ih": 768}
             bar = wi["oh"] - wi["ih"]
             ax  = coords["cx"] + wi["sx"]
             ay  = coords["cy"] + wi["sy"] + bar
-            print(f"🖱️  ALTCHA点击复选框  ({ax}, {ay})")
             _xdotool_click(ax, ay)
 
         try:
             iframes = sb.find_elements('div.modal.show iframe')
             for iframe in iframes:
-                try:
-                    iframe.click()
-                    print("🖱️  SeleniumBase 点击模态框 iframe")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                try: iframe.click()
+                except Exception: pass
+        except Exception: pass
 
         sb.execute_script("""
             (function(){
@@ -508,12 +463,6 @@ def _solve_altcha(sb) -> bool:
                 for (var i = 0; i < iframes.length; i++) {
                     iframes[i].click();
                     iframes[i].dispatchEvent(new MouseEvent('click', {bubbles:true}));
-                }
-                var labels = modal.querySelectorAll('label');
-                for (var j = 0; j < labels.length; j++) {
-                    var txt = (labels[j].textContent || '').toLowerCase();
-                    if (txt.includes('robot') || txt.includes('captcha') || txt.includes('verify'))
-                        labels[j].click();
                 }
                 var cbs = modal.querySelectorAll('input[type="checkbox"]');
                 for (var k = 0; k < cbs.length; k++) {
@@ -528,18 +477,13 @@ def _solve_altcha(sb) -> bool:
         for _ in range(6):
             time.sleep(1)
             if sb.execute_script(_ALTCHA_SOLVED_JS):
-                print(f"✅ ALTCHA 验证通过（第 {attempt + 1} 轮）")
                 return True
 
-        print(f"   ⚠️ 第 {attempt + 1} 轮未通过，重试...")
         try:
             new_coords = sb.execute_script(_ALTCHA_EXPAND_JS)
-            if new_coords:
-                coords = new_coords
-        except Exception:
-            pass
+            if new_coords: coords = new_coords
+        except Exception: pass
 
-    print("   ❌ ALTCHA 3 轮均失败")
     return False
 
 def _submit_renew(sb):
@@ -579,7 +523,6 @@ def _check_renew_result(sb):
         else:
             send_tg_message("ℹ️", "续期操作已执行", alert_text, screenshot_file, EMAIL)
     else:
-        print("ℹ️ 未检测到明确的提示框，可能续期操作未生效")
         send_tg_message("ℹ️", "续期操作已执行", "未检测到明确提示", screenshot_file, EMAIL)
 
 def renew_server(sb):
@@ -598,12 +541,18 @@ def renew_server(sb):
     _submit_renew(sb)
     _check_renew_result(sb)
 
-
+# =======================================================
+# 重写后的控制面板逻辑（严格使用 CONTROL_ID/PASSWORD）
+# =======================================================
 def manage_control_panel(sb):
-    """检查控制面板的运行状态，离线则启动，在线则重启"""
     print("\n" + "#" * 25)
     print(f"  开始管理控制面板: {CONTROL_URL}")
     print("#" * 25)
+
+    # 严格拦截：如果不设置 CONTROL_ID 和 CONTROL_PASSWORD，则直接跳过，防止使用主账号登录报错
+    if not CONTROL_ID or not CONTROL_PASSWORD:
+        print("⚠️ 环境变量中未配置 CONTROL_ID 或 CONTROL_PASSWORD，跳过控制面板管理步骤。")
+        return
 
     print("🌐 打开控制面板...")
     sb.uc_open_with_reconnect(CONTROL_URL, reconnect_time=8)
@@ -611,31 +560,27 @@ def manage_control_panel(sb):
 
     current_url = sb.get_current_url().lower()
     
-    # 获取准备使用的 ID (控制面板可能直接用 Email，也可能用独立 ID)
-    login_id = CONTROL_ID if CONTROL_ID else EMAIL
-    
     if "/auth/login" in current_url:
         print("📧 填写控制面板账号...")
         try:
-            # 填入账号 ID：适配主流 Pterodactyl 面板
+            # 确保 React 输入框加载出来
+            sb.wait_for_element('input[type="text"], input[name="user"], input[name="username"]', timeout=10)
+            
+            # 使用 sb.type 模拟真实的逐字敲击动作，100% 触发 React 底层的 onChange 事件，解决 js_fill_input 表单为空的问题
             if sb.is_element_present('input[name="user"]'):
-                js_fill_input(sb, 'input[name="user"]', login_id)
+                sb.type('input[name="user"]', CONTROL_ID)
             elif sb.is_element_present('input[name="username"]'):
-                js_fill_input(sb, 'input[name="username"]', login_id)
-            elif sb.is_element_present('input[type="text"]'):
-                js_fill_input(sb, 'input[type="text"]', login_id)
+                sb.type('input[name="username"]', CONTROL_ID)
             else:
-                print("⚠️ 未找到账号输入框")
+                sb.type('input[type="text"]', CONTROL_ID)
                 
             time.sleep(1)
             
             print("🔑 填写控制面板密码...")
             if sb.is_element_present('input[name="password"]'):
-                js_fill_input(sb, 'input[name="password"]', CONTROL_PASSWORD)
-            elif sb.is_element_present('input[type="password"]'):
-                js_fill_input(sb, 'input[type="password"]', CONTROL_PASSWORD)
+                sb.type('input[name="password"]', CONTROL_PASSWORD)
             else:
-                print("⚠️ 未找到密码输入框")
+                sb.type('input[type="password"]', CONTROL_PASSWORD)
             
             time.sleep(1)
             
@@ -643,11 +588,9 @@ def manage_control_panel(sb):
                 print("🔍 控制面板登录页检测到 Turnstile, 尝试处理...")
                 handle_turnstile(sb)
             
-            print("🖱️ 提交登录信息...")
-            try:
-                sb.click('button[type="submit"], button:contains("Login"), button:contains("登录")', timeout=3)
-            except Exception:
-                sb.press_keys('input[type="password"]', '\n')
+            print("🖱️ 敲击回车提交登录信息...")
+            # 抛弃不可靠的按钮点击，直接对密码输入框触发回车 (Enter) 键，这是对 React 表单成功率最高的方式
+            sb.press_keys('input[type="password"], input[name="password"]', '\n')
             
             print("⏳ 等待控制面板登录跳转...")
             login_success = False
@@ -661,7 +604,8 @@ def manage_control_panel(sb):
             if not login_success:
                 print("❌ 控制面板登录失败，页面未跳转。请检查 CONTROL_ID 和 CONTROL_PASSWORD。")
                 sb.save_screenshot("control_login_fail.png")
-                send_tg_message("❌", "面板登录失败", "控制面板账号密码不匹配或遇到二次验证", "control_login_fail.png", target_email=login_id)
+                # 推送时附加上当前使用的 CONTROL_ID，方便核对问题
+                send_tg_message("❌", "面板登录失败", "控制面板账号密码不匹配或遇到二次验证", "control_login_fail.png", target_email=CONTROL_ID)
                 return
         except Exception as e:
             print(f"⚠️ 控制面板登录过程异常: {e}")
@@ -683,10 +627,10 @@ def manage_control_panel(sb):
             print("✅ 已点击【启动】按钮")
             time.sleep(3)
             sb.save_screenshot("server_started.png")
-            send_tg_message("🚀", "服务器已启动", f"检测到服务器离线，已执行开机操作。\n面板: {CONTROL_URL}", "server_started.png", target_email=login_id)
+            send_tg_message("🚀", "服务器已启动", f"检测到服务器离线，已执行开机操作。\n面板: {CONTROL_URL}", "server_started.png", target_email=CONTROL_ID)
         except Exception as e:
             print(f"⚠️ 无法找到启动按钮: {e}")
-            send_tg_message("⚠️", "启动服务器失败", "在控制面板未找到Start/启动按钮", screenshot_file, target_email=login_id)
+            send_tg_message("⚠️", "启动服务器失败", "在控制面板未找到Start/启动按钮", screenshot_file, target_email=CONTROL_ID)
     else:
         print("🟢 服务器当前处于【运行】状态，准备重启...")
         try:
@@ -694,10 +638,10 @@ def manage_control_panel(sb):
             print("✅ 已点击【重启】按钮")
             time.sleep(3)
             sb.save_screenshot("server_restarted.png")
-            send_tg_message("🔄", "服务器已重启", f"服务器当前在线，已执行重启操作。\n面板: {CONTROL_URL}", "server_restarted.png", target_email=login_id)
+            send_tg_message("🔄", "服务器已重启", f"服务器当前在线，已执行重启操作。\n面板: {CONTROL_URL}", "server_restarted.png", target_email=CONTROL_ID)
         except Exception as e:
             print(f"⚠️ 无法找到重启按钮: {e}")
-            send_tg_message("⚠️", "重启服务器失败", "在控制面板未找到Restart/重启按钮", screenshot_file, target_email=login_id)
+            send_tg_message("⚠️", "重启服务器失败", "在控制面板未找到Restart/重启按钮", screenshot_file, target_email=CONTROL_ID)
 
 # ==========================================
 # 脚本入口
@@ -710,7 +654,6 @@ def main():
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
     proxy_str = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1081"
     
-    # 注意：如果运行在无头服务器(如纯Linux云主机)，headless必须为False，并需要配置Xvfb运行
     sb_kwargs = {"uc": True, "headless": False}
 
     if IS_PROXY:
@@ -721,12 +664,6 @@ def main():
     
     print("🚀 启动浏览器...")
     with SB(**sb_kwargs) as sb:
-        try:
-            sb.open("https://api.ip.sb/ip")
-            print(f"📍 当前出口IP: {sb.get_text('body')}")
-        except Exception:
-            pass
-
         if login(sb):
             renew_server(sb)   
             manage_control_panel(sb)
