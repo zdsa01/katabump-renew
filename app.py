@@ -19,8 +19,8 @@ PASSWORD     = os.environ.get("KATABUMP_PASSWORD") or ""
 # 控制面板 (Control Panel) 独立身份凭证池
 # 严格剥离主站邮箱依赖，实现凭证隔离
 # ==========================================
-CONTROL_ID       = os.environ.get("CONTROL_ID") or ""       # 强制仅使用独立的 CONTROL_ID
-CONTROL_PASSWORD = os.environ.get("CONTROL_PASSWORD") or "" # 强制仅使用独立的 CONTROL_PASSWORD
+CONTROL_ID       = os.environ.get("CONTROL_ID") or ""       # 强制仅使用独立的 CONTROL_ID (面板用户名)
+CONTROL_PASSWORD = os.environ.get("CONTROL_PASSWORD") or PASSWORD # 智能降级：若未独立配置面板密码，默认复用主站 PASSWORD
 
 # 3. TG 推送配置
 TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""        
@@ -612,16 +612,23 @@ def renew_server(sb):
 def manage_control_panel(sb):
     """
     基于物理键入模拟与强制鉴权的控制面板自动管理闭环。
-    已彻底禁用向 EMAIL 降级的逻辑，仅受理 CONTROL_ID 与 CONTROL_PASSWORD 环境变量。
+    已彻底禁用向 EMAIL 降级的逻辑，仅受理 CONTROL_ID (可自动复用 PASSWORD)。
     """
     print("\n" + "#" * 35)
     print(f"  初始化控制面板通信序列: {CONTROL_URL}")
     print("#" * 35)
 
     # 前置拦截器：执行严格的凭证非空校验
-    if not CONTROL_ID or not CONTROL_PASSWORD:
-        print("❌ 核心异常：系统环境未检测到独立挂载的 CONTROL_ID 或 CONTROL_PASSWORD。")
+    if not CONTROL_ID:
+        print("❌ 核心异常：系统环境未检测到独立挂载的 CONTROL_ID。")
         print("ℹ️ 安全阻断：为避免使用非法凭据（主站邮箱）触发 Pterodactyl 的防爆破封控，已强制阻断面板介入流程。")
+        print("🛠️ 修复建议：请在您的环境变量或 GitHub Secrets 中添加 CONTROL_ID（面板用户名）。")
+        # 新增拦截状态 TG 提醒
+        send_tg_message("⚠️", "面板登录被安全拦截", "未检测到 `CONTROL_ID`（面板用户名）环境变量。\n已主动跳过控制面板监控，以防账号封禁。\n请配置该变量后重试。", target_email=EMAIL)
+        return
+        
+    if not CONTROL_PASSWORD:
+        print("❌ 核心异常：未检测到任何可用的密码 (CONTROL_PASSWORD 或 PASSWORD 均为空)。")
         return
 
     print("🌐 请求建立控制面板 WebSocket/HTTPS 连接...")
@@ -646,7 +653,7 @@ def manage_control_panel(sb):
                 
             time.sleep(1)
             
-            print("🔑 注入加密鉴权密钥 (仅限独立配置的 CONTROL_PASSWORD)...")
+            print("🔑 注入加密鉴权密钥 (独立密码或继承主站密码)...")
             if sb.is_element_present('input[name="password"]'):
                 sb.type('input[name="password"]', CONTROL_PASSWORD)
             elif sb.is_element_present('input[type="password"]'):
