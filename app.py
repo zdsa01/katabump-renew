@@ -17,7 +17,7 @@ PASSWORD     = os.environ.get("KATABUMP_PASSWORD") or ""
 
 # 2. 控制面板 (Control Panel) 账号密码（修改为 ID + PASSWORD）
 # 如果你的控制面板密码与财务面板不同，请在环境变量中额外配置这两项
-CONTROL_ID       = os.environ.get("CONTROL_ID") or ""       # 使用 ID 登录
+CONTROL_ID       = os.environ.get("CONTROL_ID") or "464a09985b68e31"       # 使用 ID 登录
 CONTROL_PASSWORD = os.environ.get("CONTROL_PASSWORD") or PASSWORD 
 
 # 3. TG 推送配置
@@ -623,10 +623,10 @@ def manage_control_panel(sb):
     login_id = CONTROL_ID if CONTROL_ID else EMAIL
     
     if "/auth/login" in current_url:
-        print(f"🔑 控制面板需要登录，尝试填入专属账号 ID: {login_id} ...")
+        print(f"🔑 控制面板需要登录，尝试填入专属账号 ID: {464a09985b68e31} ...")
         
         if not CONTROL_ID:
-            print("⚠️ 未配置 CONTROL_ID 环境变量，使用注册 EMAIL 作为兜底尝试...")
+            print("⚠️ 未配置 CONTROL_ID 环境变量，使用填入专属账号 ID: {464a09985b68e31}...")
 
         try:
             # 填入账号 ID：适配主流 Pterodactyl 面板
