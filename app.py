@@ -27,7 +27,9 @@ TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 BASE_URL = "https://dashboard.katabump.com"  
 CONTROL_URL = "https://control.katabump.com/server/3c771e38" 
 
-#  Telegram 推送模块（支持带截图发送）
+# ==========================================
+# Telegram 推送模块
+# ==========================================
 def send_tg_message(status_icon, status_text, time_left="", image_path=None, target_email=EMAIL):
     if not TG_BOT_TOKEN or not TG_CHAT_ID:
         print("ℹ️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送。")
@@ -91,7 +93,9 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
     except Exception as e:
         print(f"⚠️ Telegram 通知发送异常: {e}")
 
-#  页面注入脚本
+# ==========================================
+# JS 脚本注入常量
+# ==========================================
 _EXPAND_JS = """
 (function() {
     var ts = document.querySelector('input[name="cf-turnstile-response"]');
@@ -140,9 +144,6 @@ _WININFO_JS = """
 })()
 """
 
-# ===== 自动续期相关 =====
-
-# 在模态框内查找 iframe 并展开，返回点击坐标
 _ALTCHA_EXPAND_JS = """
 (function() {
     var modal = document.querySelector('div.modal.show') || document;
@@ -170,30 +171,30 @@ _ALTCHA_EXPAND_JS = """
 })()
 """
 
-# 检测 ALTCHA 是否已验证通过
 _ALTCHA_SOLVED_JS = """
 (function(){
     var modal = document.querySelector('div.modal.show') || document;
-    // hidden input 有值
     var inputs = modal.querySelectorAll('input[type="hidden"]');
     for (var i = 0; i < inputs.length; i++) {
         var n = (inputs[i].name || '').toLowerCase();
         if ((n.includes('altcha') || n.includes('captcha')) &&
             inputs[i].value && inputs[i].value.length > 20) return true;
     }
-    // checkbox 变为 disabled
     var cbs = modal.querySelectorAll('input[type="checkbox"]');
     for (var j = 0; j < cbs.length; j++) {
         if (cbs[j].disabled) return true;
     }
-    // widget data-state 属性
     var w = modal.querySelector('[data-state="verified"],.altcha--verified,.altcha-verified');
     if (w) return true;
     return false;
 })()
 """
 
+# ==========================================
+# 辅助函数
+# ==========================================
 def js_fill_input(sb, selector: str, text: str):
+    """通过原生 JS 触发 React/Vue 数据绑定的输入方法"""
     safe_text = text.replace('\\', '\\\\').replace('"', '\\"')
     sb.execute_script(f"""
     (function(){{
@@ -235,7 +236,9 @@ def _xdotool_click(x: int, y: int):
     except Exception:
         os.system(f"xdotool mousemove {x} {y} click 1 2>/dev/null")
 
-#  人机验证处理
+# ==========================================
+# 核心业务逻辑
+# ==========================================
 def handle_turnstile(sb) -> bool:
     print("🔍 处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
@@ -268,10 +271,9 @@ def handle_turnstile(sb) -> bool:
 
         print(f"⚠️ 第 {attempt + 1} 次未通过，重试...")
 
-    print("  ❌ Turnstile 6 次均失败")
+    print("❌ Turnstile 6 次均失败")
     return False
 
-#  账户登录
 def login(sb) -> bool:
     print(f"🌐 打开登录页面: {BASE_URL}/auth/login")
     sb.uc_open_with_reconnect(BASE_URL + "/auth/login", reconnect_time=8)
@@ -298,8 +300,8 @@ def login(sb) -> bool:
             print("❌ 页面未加载出登录表单")
             cur_url = sb.get_current_url()
             page_title = sb.get_title() or ""
-            print(f"  当前 URL: {cur_url}")
-            print(f"  当前标题: {page_title}")
+            print(f"   当前 URL: {cur_url}")
+            print(f"   当前标题: {page_title}")
             sb.save_screenshot("login_load_fail.png")
             send_tg_message("❌", "登录失败", f"页面未加载出登录表单 ({cur_url})", "login_load_fail.png", EMAIL)
             return False
@@ -362,8 +364,6 @@ def login(sb) -> bool:
     send_tg_message("❌", "登录失败", f"跳转失败 (URL: {sb.get_current_url()})", "login_failed.png", EMAIL)
     return False
 
-# ===== 自动续期流程 =====
-
 def _read_alert(sb):
     try:
         el = sb.find_element("div.alert", timeout=4)
@@ -372,12 +372,12 @@ def _read_alert(sb):
         return ""
 
 def _goto_server_detail(sb) -> bool:
-    print("\n🖥️  正在进入服务器续期页...")
+    print("\n🖥️ 正在进入服务器续期页...")
     time.sleep(5)
 
     alert_text = _read_alert(sb)
     if alert_text and "can't renew" in alert_text.lower():
-        print(f"ℹ️  页面顶部提示: {alert_text}")
+        print(f"ℹ️ 页面顶部提示: {alert_text}")
         sb.save_screenshot("renew_not_time.png")
         send_tg_message("⏳", "未到续期时间", alert_text, "renew_not_time.png", EMAIL)
         return False
@@ -411,18 +411,16 @@ def _goto_server_detail(sb) -> bool:
 
     if see_link is None:
         cur_url = sb.get_current_url()
-        title = sb.get_title() or ""
         print(f"❌ 未找到 'See' 链接")
         sb.save_screenshot("servers_page_fail.png")
         send_tg_message("❌", "未找到服务器列表", f"未找到 See 按钮 ({cur_url})", "servers_page_fail.png", EMAIL)
         return False
 
-    print("🖱️  点击 'See' 进入服务器详情页...")
+    print("🖱️ 点击 'See' 进入服务器详情页...")
     see_link.click()
     time.sleep(5)
     print(f"📄 当前页面: {sb.get_current_url()}")
     return True
-
 
 def _open_renew_modal(sb) -> bool:
     print("\n🔄 查找 Renew 按钮...")
@@ -432,7 +430,7 @@ def _open_renew_modal(sb) -> bool:
         try:
             renew_btn = sb.find_element('button.btn.btn-outline-primary', timeout=5)
         except Exception:
-            print("  ❌ 未找到 Renew 按钮")
+            print("   ❌ 未找到 Renew 按钮")
             sb.save_screenshot("renew_btn_not_found.png")
             send_tg_message("⚠️", "未找到 Renew 按钮", "服务器详情页未出现 Renew 按钮", "renew_btn_not_found.png", EMAIL)
             return False
@@ -440,7 +438,7 @@ def _open_renew_modal(sb) -> bool:
     sb.execute_script("""
         (function(){
             var btn = document.querySelector('button[data-bs-target="#renew-modal"]')
-                     || document.querySelector('button.btn.btn-outline-primary');
+                      || document.querySelector('button.btn.btn-outline-primary');
             if (btn) btn.scrollIntoView({behavior:'smooth',block:'center'});
         })()
     """)
@@ -458,7 +456,6 @@ def _open_renew_modal(sb) -> bool:
         sb.save_screenshot("renew_modal_failed.png")
         return False
 
-
 def _solve_altcha(sb) -> bool:
     print("\n🔐 处理 ALTCHA 人机验证...")
     time.sleep(2)
@@ -474,7 +471,7 @@ def _solve_altcha(sb) -> bool:
         pass
 
     if coords:
-        print(f"  📍 找到模态框内 iframe 坐标: ({coords['cx']}, {coords['cy']})")
+        print(f"   📍 找到模态框内 iframe 坐标: ({coords['cx']}, {coords['cy']})")
 
     for attempt in range(3):
         if sb.execute_script(_ALTCHA_SOLVED_JS):
@@ -534,7 +531,7 @@ def _solve_altcha(sb) -> bool:
                 print(f"✅ ALTCHA 验证通过（第 {attempt + 1} 轮）")
                 return True
 
-        print(f"  ⚠️ 第 {attempt + 1} 轮未通过，重试...")
+        print(f"   ⚠️ 第 {attempt + 1} 轮未通过，重试...")
         try:
             new_coords = sb.execute_script(_ALTCHA_EXPAND_JS)
             if new_coords:
@@ -542,12 +539,11 @@ def _solve_altcha(sb) -> bool:
         except Exception:
             pass
 
-    print("  ❌ ALTCHA 3 轮均失败")
+    print("   ❌ ALTCHA 3 轮均失败")
     return False
 
-
 def _submit_renew(sb):
-    print("🖱️  点击模态框中的 Renew 按钮...")
+    print("🖱️ 点击模态框中的 Renew 按钮...")
     try:
         submit = sb.find_element('div.modal.show button.btn-primary', timeout=5)
         submit.click()
@@ -562,7 +558,6 @@ def _submit_renew(sb):
             })()
         """)
     time.sleep(3)
-
 
 def _check_renew_result(sb):
     print("\n📋 检查续期结果...")
@@ -587,7 +582,6 @@ def _check_renew_result(sb):
         print("ℹ️ 未检测到明确的提示框，可能续期操作未生效")
         send_tg_message("ℹ️", "续期操作已执行", "未检测到明确提示", screenshot_file, EMAIL)
 
-
 def renew_server(sb):
     print("\n" + "#" * 25)
     print("  开始自动续期流程")
@@ -605,11 +599,9 @@ def renew_server(sb):
     _check_renew_result(sb)
 
 
-# ===== 控制面板运行状态管理 =====
-
 def manage_control_panel(sb):
     """检查控制面板的运行状态，离线则启动，在线则重启"""
-    print(f"\n" + "#" * 25)
+    print("\n" + "#" * 25)
     print(f"  开始管理控制面板: {CONTROL_URL}")
     print("#" * 25)
 
@@ -619,34 +611,31 @@ def manage_control_panel(sb):
 
     current_url = sb.get_current_url().lower()
     
-    # 获取准备使用的 ID
+    # 获取准备使用的 ID (控制面板可能直接用 Email，也可能用独立 ID)
     login_id = CONTROL_ID if CONTROL_ID else EMAIL
     
     if "/auth/login" in current_url:
-            print(f"📧 填写ID...")
-            js_fill_input(sb, 'input[name="CONTROL_ID"]', EMAIL)
-            time.sleep(7)
-    
-            print("🔑 填写密码...")
-            js_fill_input(sb, 'input[name="password"]', PASSWORD)
-            time.sleep(8)
-
+        print("📧 填写控制面板账号...")
         try:
             # 填入账号 ID：适配主流 Pterodactyl 面板
             if sb.is_element_present('input[name="user"]'):
-                sb.type('input[name="user"]', login_id)
+                js_fill_input(sb, 'input[name="user"]', login_id)
             elif sb.is_element_present('input[name="username"]'):
-                sb.type('input[name="username"]', login_id)
+                js_fill_input(sb, 'input[name="username"]', login_id)
             elif sb.is_element_present('input[type="text"]'):
-                sb.type('input[type="text"]', login_id)
+                js_fill_input(sb, 'input[type="text"]', login_id)
+            else:
+                print("⚠️ 未找到账号输入框")
                 
-            time.sleep(0.5)
+            time.sleep(1)
             
-            # 填入密码
+            print("🔑 填写控制面板密码...")
             if sb.is_element_present('input[name="password"]'):
-                sb.type('input[name="password"]', CONTROL_PASSWORD)
+                js_fill_input(sb, 'input[name="password"]', CONTROL_PASSWORD)
             elif sb.is_element_present('input[type="password"]'):
-                sb.type('input[type="password"]', CONTROL_PASSWORD)
+                js_fill_input(sb, 'input[type="password"]', CONTROL_PASSWORD)
+            else:
+                print("⚠️ 未找到密码输入框")
             
             time.sleep(1)
             
@@ -656,10 +645,8 @@ def manage_control_panel(sb):
             
             print("🖱️ 提交登录信息...")
             try:
-                # 优先寻找 button 元素并点击
                 sb.click('button[type="submit"], button:contains("Login"), button:contains("登录")', timeout=3)
             except Exception:
-                # 找不到明确按钮时回退到敲击回车
                 sb.press_keys('input[type="password"]', '\n')
             
             print("⏳ 等待控制面板登录跳转...")
@@ -674,7 +661,6 @@ def manage_control_panel(sb):
             if not login_success:
                 print("❌ 控制面板登录失败，页面未跳转。请检查 CONTROL_ID 和 CONTROL_PASSWORD。")
                 sb.save_screenshot("control_login_fail.png")
-                # 推送时附带控制面板的 ID，方便核实
                 send_tg_message("❌", "面板登录失败", "控制面板账号密码不匹配或遇到二次验证", "control_login_fail.png", target_email=login_id)
                 return
         except Exception as e:
@@ -713,8 +699,9 @@ def manage_control_panel(sb):
             print(f"⚠️ 无法找到重启按钮: {e}")
             send_tg_message("⚠️", "重启服务器失败", "在控制面板未找到Restart/重启按钮", screenshot_file, target_email=login_id)
 
-
-#  脚本执行入口 
+# ==========================================
+# 脚本入口
+# ==========================================
 def main():
     print("#" * 25)
     print("   katabump 自动登录续期与管理")
@@ -722,6 +709,8 @@ def main():
 
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
     proxy_str = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1081"
+    
+    # 注意：如果运行在无头服务器(如纯Linux云主机)，headless必须为False，并需要配置Xvfb运行
     sb_kwargs = {"uc": True, "headless": False}
 
     if IS_PROXY:
@@ -734,7 +723,7 @@ def main():
     with SB(**sb_kwargs) as sb:
         try:
             sb.open("https://api.ip.sb/ip")
-            print(f"📍  当前出口IP: {sb.get_text('body')}")
+            print(f"📍 当前出口IP: {sb.get_text('body')}")
         except Exception:
             pass
 
