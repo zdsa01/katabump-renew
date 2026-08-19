@@ -222,70 +222,165 @@ def _xdotool_click(x: int, y: int):
         os.system(f"xdotool mousemove {x} {y} click 1 2>/dev/null")
 
 def handle_turnstile(sb) -> bool:
+    """More robust Cloudflare Turnstile solver."""
     print("🔍 处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
-    if sb.execute_script(_SOLVED_JS): return True
-    for _ in range(3):
-        try: sb.execute_script(_EXPAND_JS)
-        except Exception: pass
-        time.sleep(0.5)
 
-    for attempt in range(6):
-        if sb.execute_script(_SOLVED_JS): return True
-        try: sb.uc_gui_click_captcha()
-        except Exception: pass
-        for _ in range(16):
-            time.sleep(0.5)
-            if sb.execute_script(_SOLVED_JS): return True
+    # Already solved?
+    if sb.execute_script(_SOLVED_JS):
+        print("✅ Turnstile 已自动通过")
+        return True
+
+    # Force the widget visible / expand overflow
+    for _ in range(4):
+        try:
+            sb.execute_script(_EXPAND_JS)
+        except Exception:
+            pass
+        time.sleep(0.4)
+
+    # Try SeleniumBase UC click first
+    for attempt in range(5):
+        if sb.execute_script(_SOLVED_JS):
+            print("✅ Turnstile 已解决")
+            return True
+
+        print(f"  → 第 {attempt+1} 次尝试点击验证框...")
+        try:
+            sb.uc_gui_click_captcha()
+        except Exception as e:
+            print(f"    uc_gui_click_captcha 异常: {e}")
+
+        # Also try direct coordinate click as fallback
+        try:
+            # Find the checkbox area
+            rect = sb.execute_script("""
+                (function(){
+                    var iframe = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+                    if (!iframe) return null;
+                    var r = iframe.getBoundingClientRect();
+                    return {x: Math.round(r.x + 30), y: Math.round(r.y + r.height/2)};
+                })()
+            """)
+            if rect:
+                wi = sb.execute_script(_WININFO_JS)
+                _xdotool_click(rect["x"] + wi["sx"],
+                               rect["y"] + wi["sy"] + (wi["oh"] - wi["ih"]))
+        except Exception:
+            pass
+
+        # Poll for token
+        for _ in range(12):
+            time.sleep(0.6)
+            if sb.execute_script(_SOLVED_JS):
+                print("✅ Turnstile 已解决")
+                return True
+
+    print("❌ Turnstile 未能在限定时间内解决")
     return False
+
 
 def login(sb) -> bool:
     print(f"🌐 打开登录页面: {BASE_URL}/auth/login")
-    sb.uc_open_with_reconnect(BASE_URL + "/auth/login", reconnect_time=8)
-    time.sleep(6)
+    sb.uc_open_with_reconnect(BASE_URL + "/auth/login", reconnect_time=10)
+    time.sleep(5)
 
-    cf_passed = False
-    for i in range(30):
-        page_src = sb.get_page_source() or ""
-        if 'input[name="email"]' in page_src.lower() or 'name="email"' in page_src.lower():
-            cf_passed = True
-            break
+    # Wait until the real login form appears (email input)
+    form_ready = False
+    for i in range(35):
+        try:
+            if sb.is_element_present('input[name="email"]') or \
+               sb.is_element_present('input[type="email"]'):
+                form_ready = True
+                break
+        except Exception:
+            pass
         time.sleep(1)
 
-    try:
-        sb.wait_for_element('input[name="email"], input[name="Email"]', timeout=15)
-    except Exception:
+    if not form_ready:
         sb.save_screenshot("login_load_fail.png")
-        send_tg_message("❌", "登录失败", f"页面未加载出登录表单", "login_load_fail.png", EMAIL)
+        send_tg_message("❌", "登录失败", "页面未加载出登录表单", "login_load_fail.png", EMAIL)
         return False
 
+    # Dismiss cookie banner if present
     try:
         for btn in sb.find_elements("button"):
-            if "Accept" in (btn.text or ""):
+            txt = (btn.text or "").lower()
+            if "accept" in txt or "同意" in txt or "accept all" in txt:
                 btn.click()
                 time.sleep(0.5)
                 break
-    except Exception: pass
+    except Exception:
+        pass
 
-    print(f"📧 填写邮箱与密码...")
-    js_fill_input(sb, 'input[name="email"]', EMAIL)
-    js_fill_input(sb, 'input[name="password"]', PASSWORD)
-    time.sleep(1)
+    print("📧 填写邮箱与密码...")
+    # Prefer name=email, fall back to type=email
+    email_sel = 'input[name="email"]'
+    if not sb.is_element_present(email_sel):
+        email_sel = 'input[type="email"]'
+    js_fill_input(sb, email_sel, EMAIL)
 
-    if sb.execute_script(_EXISTS_JS): handle_turnstile(sb)
+    pass_sel = 'input[name="password"]'
+    if not sb.is_element_present(pass_sel):
+        pass_sel = 'input[type="password"]'
+    js_fill_input(sb, pass_sel, PASSWORD)
+    time.sleep(1.2)
 
-    sb.press_keys('input[name="password"]', '\n')
+    # Handle Turnstile if the widget exists
+    if sb.execute_script(_EXISTS_JS):
+        if not handle_turnstile(sb):
+            sb.save_screenshot("login_failed.png")
+            send_tg_message("❌", "登录失败", "Turnstile 验证未通过", "login_failed.png", EMAIL)
+            return False
+    else:
+        print("ℹ️ 未检测到 Turnstile 控件，直接提交")
+
+    # Extra safety: make sure token is present before submit
+    for _ in range(8):
+        if sb.execute_script(_SOLVED_JS):
+            break
+        time.sleep(0.5)
+
+    # Submit
+    try:
+        # Prefer clicking the Login button
+        login_btn = None
+        for btn in sb.find_elements("button"):
+            if "login" in (btn.text or "").lower() or "登录" in (btn.text or ""):
+                login_btn = btn
+                break
+        if login_btn:
+            login_btn.click()
+        else:
+            sb.press_keys(pass_sel, "\n")
+    except Exception:
+        sb.press_keys(pass_sel, "\n")
+
     print("⏳ 等待跳转...")
-    
-    for _ in range(12):
+    for _ in range(18):
         time.sleep(1)
-        cur_url = sb.get_current_url().split('?')[0].lower()
-        if cur_url.startswith(f"{BASE_URL}/dashboard") or "dashboard" in (sb.get_title() or "").lower():
+        cur = sb.get_current_url().split("?")[0].lower()
+        title = (sb.get_title() or "").lower()
+        if "dashboard" in cur or "dashboard" in title or "/servers" in cur:
             print("✅ 登录成功！")
             return True
-            
+
+        # Detect explicit captcha error again
+        try:
+            page = sb.get_page_source().lower()
+            if "please complete captcha" in page or "complete the captcha" in page:
+                print("⚠️ 页面仍提示需要完成验证码，尝试再次处理...")
+                handle_turnstile(sb)
+                # re-submit once
+                try:
+                    sb.press_keys(pass_sel, "\n")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     sb.save_screenshot("login_failed.png")
-    send_tg_message("❌", "登录失败", f"跳转失败", "login_failed.png", EMAIL)
+    send_tg_message("❌", "登录失败", "跳转失败 / 仍停留在登录页", "login_failed.png", EMAIL)
     return False
 
 def _read_alert(sb):
