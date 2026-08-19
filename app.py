@@ -19,7 +19,7 @@ TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 
 BASE_URL = "https://dashboard.katabump.com"
-CONTROL_URL = "https://control.katabump.com/server/3c771e38"   # 可按需改成环境变量
+CONTROL_URL = "https://control.katabump.com/server/3c771e38"   # 可按需修改
 
 # ------------------------------------------------------------------
 # Telegram 推送
@@ -591,7 +591,7 @@ def renew_server(sb):
 
 
 # ------------------------------------------------------------------
-# 控制面板管理（已去除重复代码）
+# 控制面板管理
 # ------------------------------------------------------------------
 def manage_control_panel(sb):
     print("\n" + "#" * 35)
