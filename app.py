@@ -35,11 +35,9 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
         print("ℹ️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送。")
         return
 
-    # 获取北京时间 (UTC+8)
     local_time = time.gmtime(time.time() + 8 * 3600)
     current_time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
-    # 账号脱敏：兼容邮箱和纯ID
     if target_email and '@' in target_email:
         name, domain = target_email.split('@', 1)
         if len(name) > 4:
@@ -47,7 +45,6 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
         else:
             masked_email = f"{name}@{domain}"
     else:
-        # 如果是纯 ID 登录
         masked_email = target_email[:2] + '****' if target_email and len(target_email) >= 2 else target_email
 
     text = (
@@ -59,7 +56,6 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
     if time_left:
         text += f"\nℹ️ 详细说明: {time_left}"
 
-    # 1. 优先尝试发送带图消息
     if image_path and os.path.exists(image_path):
         url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
         try:
@@ -78,12 +74,8 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
         except Exception as e:
             print(f"⚠️ Telegram 带图发送异常: {e}，回退为纯文字发送...")
 
-    # 2. 回退方案：发送纯文字消息
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TG_CHAT_ID,
-        "text": text
-    }
+    payload = {"chat_id": TG_CHAT_ID, "text": text}
     try:
         r = requests.post(url, json=payload, timeout=10)
         if r.status_code == 200:
@@ -93,7 +85,6 @@ def send_tg_message(status_icon, status_text, time_left="", image_path=None, tar
     except Exception as e:
         print(f"⚠️ Telegram 通知发送异常: {e}")
 
-#  页面注入脚本
 _EXPAND_JS = """
 (function() {
     var ts = document.querySelector('input[name="cf-turnstile-response"]');
@@ -142,9 +133,6 @@ _WININFO_JS = """
 })()
 """
 
-# ===== 自动续期相关 =====
-
-# 在模态框内查找 iframe 并展开，返回点击坐标
 _ALTCHA_EXPAND_JS = """
 (function() {
     var modal = document.querySelector('div.modal.show') || document;
@@ -172,23 +160,19 @@ _ALTCHA_EXPAND_JS = """
 })()
 """
 
-# 检测 ALTCHA 是否已验证通过
 _ALTCHA_SOLVED_JS = """
 (function(){
     var modal = document.querySelector('div.modal.show') || document;
-    // hidden input 有值
     var inputs = modal.querySelectorAll('input[type="hidden"]');
     for (var i = 0; i < inputs.length; i++) {
         var n = (inputs[i].name || '').toLowerCase();
         if ((n.includes('altcha') || n.includes('captcha')) &&
             inputs[i].value && inputs[i].value.length > 20) return true;
     }
-    // checkbox 变为 disabled
     var cbs = modal.querySelectorAll('input[type="checkbox"]');
     for (var j = 0; j < cbs.length; j++) {
         if (cbs[j].disabled) return true;
     }
-    // widget data-state 属性
     var w = modal.querySelector('[data-state="verified"],.altcha--verified,.altcha-verified');
     if (w) return true;
     return false;
@@ -237,334 +221,163 @@ def _xdotool_click(x: int, y: int):
     except Exception:
         os.system(f"xdotool mousemove {x} {y} click 1 2>/dev/null")
 
-#  人机验证处理
 def handle_turnstile(sb) -> bool:
     print("🔍 处理 Cloudflare Turnstile 验证...")
     time.sleep(2)
-
-    if sb.execute_script(_SOLVED_JS):
-        print("✅ 已静默通过")
-        return True
-
+    if sb.execute_script(_SOLVED_JS): return True
     for _ in range(3):
         try: sb.execute_script(_EXPAND_JS)
         except Exception: pass
         time.sleep(0.5)
 
     for attempt in range(6):
-        if sb.execute_script(_SOLVED_JS):
-            print(f"✅ Turnstile 通过（第 {attempt} 次尝试）")
-            return True
-
-        print(f"🖱️ 第 {attempt + 1} 次调用 uc_gui_click_captcha...")
-        try:
-            sb.uc_gui_click_captcha()
-        except Exception as e:
-            print(f"⚠️ uc_gui_click_captcha 调用异常: {e}")
-
+        if sb.execute_script(_SOLVED_JS): return True
+        try: sb.uc_gui_click_captcha()
+        except Exception: pass
         for _ in range(16):
             time.sleep(0.5)
-            if sb.execute_script(_SOLVED_JS):
-                print(f"✅ Turnstile 通过（第 {attempt + 1} 次尝试）")
-                return True
-
-        print(f"⚠️ 第 {attempt + 1} 次未通过，重试...")
-
-    print("  ❌ Turnstile 6 次均失败")
+            if sb.execute_script(_SOLVED_JS): return True
     return False
 
-#  账户登录
 def login(sb) -> bool:
     print(f"🌐 打开登录页面: {BASE_URL}/auth/login")
     sb.uc_open_with_reconnect(BASE_URL + "/auth/login", reconnect_time=8)
     time.sleep(6)
 
-    print("⏳ 等待 Cloudflare 验证通过...")
     cf_passed = False
     for i in range(30):
         page_src = sb.get_page_source() or ""
         if 'input[name="email"]' in page_src.lower() or 'name="email"' in page_src.lower():
             cf_passed = True
-            print(f"✅ Cloudflare 验证已通过（{i+1}s）")
             break
         time.sleep(1)
-    if not cf_passed:
-        print("⚠️ Cloudflare 验证可能未通过，继续尝试...")
 
     try:
-        sb.wait_for_element('input[name="email"]', timeout=15)
+        sb.wait_for_element('input[name="email"], input[name="Email"]', timeout=15)
     except Exception:
-        try:
-            sb.wait_for_element('input[name="Email"]', timeout=5)
-        except Exception:
-            print("❌ 页面未加载出登录表单")
-            cur_url = sb.get_current_url()
-            page_title = sb.get_title() or ""
-            print(f"  当前 URL: {cur_url}")
-            print(f"  当前标题: {page_title}")
-            sb.save_screenshot("login_load_fail.png")
-            send_tg_message("❌", "登录失败", f"页面未加载出登录表单 ({cur_url})", "login_load_fail.png", EMAIL)
-            return False
+        sb.save_screenshot("login_load_fail.png")
+        send_tg_message("❌", "登录失败", f"页面未加载出登录表单", "login_load_fail.png", EMAIL)
+        return False
 
-    print("🍪 关闭可能的 Cookie 弹窗...")
     try:
         for btn in sb.find_elements("button"):
             if "Accept" in (btn.text or ""):
                 btn.click()
                 time.sleep(0.5)
                 break
-    except Exception:
-        pass
+    except Exception: pass
 
-    print(f"📧 填写邮箱...")
+    print(f"📧 填写邮箱与密码...")
     js_fill_input(sb, 'input[name="email"]', EMAIL)
-    time.sleep(0.3)
-    
-    print("🔑 填写密码...")
     js_fill_input(sb, 'input[name="password"]', PASSWORD)
     time.sleep(1)
 
-    print("⏳ 等待 Turnstile 验证框出现...")
-    ts_found = False
-    for i in range(10):
-        if sb.execute_script(_EXISTS_JS):
-            ts_found = True
-            print(f"✅ 检测到 Turnstile（{i+1}s）")
-            break
-        time.sleep(1)
+    if sb.execute_script(_EXISTS_JS): handle_turnstile(sb)
 
-    if ts_found:
-        if not handle_turnstile(sb):
-            print("❌ 登录界面的 Turnstile 验证失败")
-            sb.save_screenshot("login_turnstile_fail.png")
-            send_tg_message("❌", "登录失败", "Turnstile 验证未通过", "login_turnstile_fail.png", EMAIL)
-            return False
-    else:
-        print("ℹ️ 未检测到 Turnstile")
-
-    print("🖱️ 敲击回车提交表单...")
     sb.press_keys('input[name="password"]', '\n')
-
-    print("⏳ 等待登录跳转...")
+    print("⏳ 等待跳转...")
+    
     for _ in range(12):
         time.sleep(1)
         cur_url = sb.get_current_url().split('?')[0].lower()
-        page_title = sb.get_title() or ""
-        if cur_url.startswith(f"{BASE_URL}/dashboard") or "dashboard | katabump" in page_title.lower():
-            break
-
-    cur_url = sb.get_current_url().split('?')[0].lower()
-    page_title = sb.get_title() or ""
-    if cur_url.startswith(f"{BASE_URL}/dashboard") or "dashboard | katabump" in page_title.lower():
-        print(f"✅ 登录成功！(URL: {sb.get_current_url()}, Title: {page_title})")
-        return True
-        
-    print(f"❌ 登录失败，页面未跳转到账户页。(URL: {sb.get_current_url()}, Title: {page_title})")
+        if cur_url.startswith(f"{BASE_URL}/dashboard") or "dashboard" in (sb.get_title() or "").lower():
+            print("✅ 登录成功！")
+            return True
+            
     sb.save_screenshot("login_failed.png")
-    send_tg_message("❌", "登录失败", f"跳转失败 (URL: {sb.get_current_url()})", "login_failed.png", EMAIL)
+    send_tg_message("❌", "登录失败", f"跳转失败", "login_failed.png", EMAIL)
     return False
 
-# ===== 自动续期流程 =====
-
 def _read_alert(sb):
-    try:
-        el = sb.find_element("div.alert", timeout=4)
-        return (el.text or "").strip()
-    except Exception:
-        return ""
+    try: return (sb.find_element("div.alert", timeout=4).text or "").strip()
+    except Exception: return ""
 
 def _goto_server_detail(sb) -> bool:
     print("\n🖥️  正在进入服务器续期页...")
     time.sleep(5)
-
     alert_text = _read_alert(sb)
     if alert_text and "can't renew" in alert_text.lower():
-        print(f"ℹ️  页面顶部提示: {alert_text}")
-        sb.save_screenshot("renew_not_time.png")
-        send_tg_message("⏳", "未到续期时间", alert_text, "renew_not_time.png", EMAIL)
+        send_tg_message("⏳", "未到续期时间", alert_text, None, EMAIL)
         return False
 
-    selectors = [
-        'a[href*="/servers/edit?id="]',
-        'td a[href*="/servers/edit"]',
-        'table a[href*="/servers/edit"]',
-        'table td a',
-    ]
-
     see_link = None
+    selectors = ['a[href*="/servers/edit?id="]', 'td a[href*="/servers/edit"]', 'table a[href*="/servers/edit"]']
     for sel in selectors:
         try:
             see_link = sb.find_element(sel, timeout=8)
-            print(f"✅ 通过选择器找到链接: {sel}")
             break
-        except Exception:
-            continue
+        except Exception: continue
 
     if see_link is None:
-        print("⚠️ 选择器未命中，尝试文本匹配...")
         try:
             for a in sb.find_elements("a"):
                 if (a.text or "").strip().lower() == "see":
                     see_link = a
-                    print("✅ 通过文本 'See' 找到链接")
                     break
-        except Exception:
-            pass
+        except Exception: pass
 
     if see_link is None:
-        cur_url = sb.get_current_url()
-        title = sb.get_title() or ""
-        print(f"❌ 未找到 'See' 链接")
-        sb.save_screenshot("servers_page_fail.png")
-        send_tg_message("❌", "未找到服务器列表", f"未找到 See 按钮 ({cur_url})", "servers_page_fail.png", EMAIL)
+        send_tg_message("❌", "未找到服务器列表", "未找到 See 按钮", None, EMAIL)
         return False
 
-    print("🖱️  点击 'See' 进入服务器详情页...")
     see_link.click()
     time.sleep(5)
-    print(f"📄 当前页面: {sb.get_current_url()}")
     return True
-
 
 def _open_renew_modal(sb) -> bool:
     print("\n🔄 查找 Renew 按钮...")
-    try:
-        renew_btn = sb.find_element('button[data-bs-target="#renew-modal"]', timeout=10)
+    try: renew_btn = sb.find_element('button[data-bs-target="#renew-modal"], button.btn.btn-outline-primary', timeout=5)
     except Exception:
-        try:
-            renew_btn = sb.find_element('button.btn.btn-outline-primary', timeout=5)
-        except Exception:
-            print("  ❌ 未找到 Renew 按钮")
-            sb.save_screenshot("renew_btn_not_found.png")
-            send_tg_message("⚠️", "未找到 Renew 按钮", "服务器详情页未出现 Renew 按钮", "renew_btn_not_found.png", EMAIL)
-            return False
-
-    sb.execute_script("""
-        (function(){
-            var btn = document.querySelector('button[data-bs-target="#renew-modal"]')
-                     || document.querySelector('button.btn.btn-outline-primary');
-            if (btn) btn.scrollIntoView({behavior:'smooth',block:'center'});
-        })()
-    """)
-    time.sleep(0.8)
-    renew_btn.click()
-    print("🖱️ 已点击 Renew 按钮，等待 ALTCHA 验证框...")
-    time.sleep(3)
-
-    try:
-        sb.find_element('div.modal.show', timeout=5)
-        print("✅ Renew 模态框已弹出")
-        return True
-    except Exception:
-        print("⚠️ 模态框未弹出")
-        sb.save_screenshot("renew_modal_failed.png")
+        send_tg_message("⚠️", "未找到 Renew 按钮", "未出现 Renew 按钮", None, EMAIL)
         return False
 
+    sb.execute_script("arguments[0].scrollIntoView({behavior:'smooth',block:'center'});", renew_btn)
+    time.sleep(0.8)
+    renew_btn.click()
+    time.sleep(3)
+    try:
+        sb.find_element('div.modal.show', timeout=5)
+        return True
+    except Exception: return False
 
 def _solve_altcha(sb) -> bool:
     print("\n🔐 处理 ALTCHA 人机验证...")
     time.sleep(2)
-
-    if sb.execute_script(_ALTCHA_SOLVED_JS):
-        print("✅ ALTCHA 已自动通过")
-        return True
-
+    if sb.execute_script(_ALTCHA_SOLVED_JS): return True
     coords = None
-    try:
-        coords = sb.execute_script(_ALTCHA_EXPAND_JS)
-    except Exception:
-        pass
-
-    if coords:
-        print(f"  📍 找到模态框内 iframe 坐标: ({coords['cx']}, {coords['cy']})")
+    try: coords = sb.execute_script(_ALTCHA_EXPAND_JS)
+    except Exception: pass
 
     for attempt in range(3):
-        if sb.execute_script(_ALTCHA_SOLVED_JS):
-            print(f"✅ ALTCHA 验证通过（第 {attempt + 1} 轮）")
-            return True
-
+        if sb.execute_script(_ALTCHA_SOLVED_JS): return True
         if coords:
-            try:
-                wi = sb.execute_script(_WININFO_JS)
-            except Exception:
-                wi = {"sx": 0, "sy": 0, "oh": 800, "ih": 768}
-            bar = wi["oh"] - wi["ih"]
-            ax  = coords["cx"] + wi["sx"]
-            ay  = coords["cy"] + wi["sy"] + bar
-            print(f"🖱️  ALTCHA点击复选框  ({ax}, {ay})")
-            _xdotool_click(ax, ay)
-
-        try:
-            iframes = sb.find_elements('div.modal.show iframe')
-            for iframe in iframes:
-                try:
-                    iframe.click()
-                    print("🖱️  SeleniumBase 点击模态框 iframe")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            try: wi = sb.execute_script(_WININFO_JS)
+            except Exception: wi = {"sx": 0, "sy": 0, "oh": 800, "ih": 768}
+            _xdotool_click(coords["cx"] + wi["sx"], coords["cy"] + wi["sy"] + (wi["oh"] - wi["ih"]))
 
         sb.execute_script("""
             (function(){
-                var modal = document.querySelector('div.modal.show');
-                if (!modal) return;
-                var iframes = modal.querySelectorAll('iframe');
-                for (var i = 0; i < iframes.length; i++) {
-                    iframes[i].click();
-                    iframes[i].dispatchEvent(new MouseEvent('click', {bubbles:true}));
-                }
-                var labels = modal.querySelectorAll('label');
-                for (var j = 0; j < labels.length; j++) {
-                    var txt = (labels[j].textContent || '').toLowerCase();
-                    if (txt.includes('robot') || txt.includes('captcha') || txt.includes('verify'))
-                        labels[j].click();
-                }
-                var cbs = modal.querySelectorAll('input[type="checkbox"]');
-                for (var k = 0; k < cbs.length; k++) {
-                    if (!cbs[k].disabled) {
-                        cbs[k].click();
-                        cbs[k].dispatchEvent(new MouseEvent('click', {bubbles:true}));
-                    }
-                }
+                var m = document.querySelector('div.modal.show'); if(!m) return;
+                var fs = m.querySelectorAll('iframe'); for(var i=0;i<fs.length;i++) fs[i].click();
+                var cbs = m.querySelectorAll('input[type="checkbox"]');
+                for(var k=0;k<cbs.length;k++) if(!cbs[k].disabled) cbs[k].click();
             })()
         """)
-
         for _ in range(6):
             time.sleep(1)
-            if sb.execute_script(_ALTCHA_SOLVED_JS):
-                print(f"✅ ALTCHA 验证通过（第 {attempt + 1} 轮）")
-                return True
-
-        print(f"  ⚠️ 第 {attempt + 1} 轮未通过，重试...")
-        try:
-            new_coords = sb.execute_script(_ALTCHA_EXPAND_JS)
-            if new_coords:
-                coords = new_coords
-        except Exception:
-            pass
-
-    print("  ❌ ALTCHA 3 轮均失败")
+            if sb.execute_script(_ALTCHA_SOLVED_JS): return True
     return False
 
-
 def _submit_renew(sb):
-    print("🖱️  点击模态框中的 Renew 按钮...")
-    try:
-        submit = sb.find_element('div.modal.show button.btn-primary', timeout=5)
-        submit.click()
-    except Exception:
-        sb.execute_script("""
-            (function(){
-                var m = document.querySelector('div.modal.show');
-                if (!m) return;
-                var bs = m.querySelectorAll('button');
-                for (var i = 0; i < bs.length; i++)
-                    if (/renew/i.test(bs[i].textContent)) bs[i].click();
-            })()
-        """)
+    print("🖱️  点击 Renew...")
+    sb.execute_script("""
+        (function(){
+            var m = document.querySelector('div.modal.show'); if(!m) return;
+            var bs = m.querySelectorAll('button');
+            for(var i=0;i<bs.length;i++) if(/renew/i.test(bs[i].textContent)) bs[i].click();
+        })()
+    """)
     time.sleep(3)
-
 
 def _check_renew_result(sb):
     print("\n📋 检查续期结果...")
@@ -573,237 +386,134 @@ def _check_renew_result(sb):
         time.sleep(3)
         alert_text = _read_alert(sb)
 
-    screenshot_file = "renew_result.png"
-    sb.save_screenshot(screenshot_file)
-
+    sb.save_screenshot("renew_result.png")
     if alert_text:
-        print(f"📩 页面提示: {alert_text}")
         low = alert_text.lower()
         if "can't renew" in low or "unable" in low:
-            send_tg_message("⏳", "未到续期时间", alert_text, screenshot_file, EMAIL)
+            send_tg_message("⏳", "未到续期时间", alert_text, "renew_result.png", EMAIL)
         elif any(kw in low for kw in ("renewed", "success", "extended")):
-            send_tg_message("✅", "续期成功", alert_text, screenshot_file, EMAIL)
+            send_tg_message("✅", "续期成功", alert_text, "renew_result.png", EMAIL)
         else:
-            send_tg_message("ℹ️", "续期操作已执行", alert_text, screenshot_file, EMAIL)
+            send_tg_message("ℹ️", "续期已执行", alert_text, "renew_result.png", EMAIL)
     else:
-        print("ℹ️ 未检测到明确的提示框，可能续期操作未生效")
-        send_tg_message("ℹ️", "续期操作已执行", "未检测到明确提示", screenshot_file, EMAIL)
-
+        send_tg_message("ℹ️", "续期已执行", "未检测到明确提示", "renew_result.png", EMAIL)
 
 def renew_server(sb):
-    print("\n" + "#" * 25)
-    print("  开始自动续期流程")
-    print("#" * 25)
-
-    if not _goto_server_detail(sb):
-        return
-    if not _open_renew_modal(sb):
-        return
-    altcha_ok = _solve_altcha(sb)
-    if not altcha_ok:
-        print("⚠️ ALTCHA 验证未通过，仍尝试提交 Renew...")
-
+    print("\n" + "#" * 25 + "\n  开始自动续期\n" + "#" * 25)
+    if not _goto_server_detail(sb): return
+    if not _open_renew_modal(sb): return
+    _solve_altcha(sb)
     _submit_renew(sb)
     _check_renew_result(sb)
 
-
-# ===== 控制面板运行状态管理 =====
-
 def manage_control_panel(sb):
-    """
-    基于物理键入模拟与强制鉴权的控制面板自动管理闭环。
-    """
-    print("\n" + "#" * 35)
-    print(f"  初始化控制面板通信序列: {CONTROL_URL}")
-    print("#" * 35)
+    print("\n" + "#" * 35 + f"\n  初始化面板通信: {CONTROL_URL}\n" + "#" * 35)
 
-    # 前置拦截器：执行严格的凭证非空校验
     if not CONTROL_ID:
-        print("❌ 核心异常：系统环境未检测到独立挂载的 CONTROL_ID。")
-        send_tg_message("⚠️", "面板登录被安全拦截", "未检测到 `CONTROL_ID`（面板用户名）环境变量。\n已主动跳过控制面板监控，以防账号封禁。", target_email=EMAIL)
+        send_tg_message("⚠️", "登录被拦截", "未检测到 CONTROL_ID", target_email=EMAIL)
         return
         
     if not CONTROL_PASSWORD:
-        print("❌ 核心异常：未检测到任何可用的密码 (CONTROL_PASSWORD 或 PASSWORD 均为空)。")
         return
 
-    print("🌐 请求建立控制面板 WebSocket/HTTPS 连接...")
     sb.uc_open_with_reconnect(CONTROL_URL, reconnect_time=8)
     time.sleep(6)
 
-    current_url = sb.get_current_url().lower()
-    
-    # 状态机：鉴权挂起状态
-    if "/auth/login" in current_url:
-        print(f"📧 注入控制面板凭证 (强制锁定目标标识符: {CONTROL_ID})...")
+    if "/auth/login" in sb.get_current_url().lower():
+        print(f"📧 注入凭证: {CONTROL_ID}...")
         try:
-            if sb.is_element_present('input[name="user"]'):
-                sb.type('input[name="user"]', CONTROL_ID)
-            elif sb.is_element_present('input[name="username"]'):
-                sb.type('input[name="username"]', CONTROL_ID)
-            elif sb.is_element_present('input[type="text"]'):
-                sb.type('input[type="text"]', CONTROL_ID)
-                
+            # 兼容多种常见的输入框命名方案
+            user_sel = 'input[name="user"], input[name="username"], input[type="text"]'
+            pass_sel = 'input[name="password"], input[type="password"]'
+            
+            sb.type(user_sel, CONTROL_ID)
             time.sleep(1)
-            
-            print("🔑 注入加密鉴权密钥...")
-            if sb.is_element_present('input[name="password"]'):
-                sb.type('input[name="password"]', CONTROL_PASSWORD)
-            elif sb.is_element_present('input[type="password"]'):
-                sb.type('input[type="password"]', CONTROL_PASSWORD)
-            
+            sb.type(pass_sel, CONTROL_PASSWORD)
             time.sleep(1.5) 
             
-            if sb.execute_script(_EXISTS_JS):
-                print("🔍 触发环境异动拦截：检测到 Cloudflare Turnstile 人机质询...")
-                handle_turnstile(sb)
+            if sb.execute_script(_EXISTS_JS): handle_turnstile(sb)
             
-            print("🖱️ 派发提交 (Submit) 动作信号...")
-            try:
-                sb.click('button[type="submit"], button:contains("Login"), button:contains("登录")', timeout=3)
-            except Exception:
-                sb.press_keys('input[type="password"]', '\n')
+            try: sb.click('button[type="submit"], button:contains("Login"), button:contains("登录")', timeout=3)
+            except Exception: sb.press_keys(pass_sel, '\n')
             
-            print("⏳ 挂起主线程，监听路由重定向及鉴权响应报文...")
             login_success = False
             for i in range(15):
                 time.sleep(1)
                 if "/auth/login" not in sb.get_current_url().lower():
                     login_success = True
-                    print(f"✅ 鉴权握手成功，系统路由已变更 (耗时 {i+1} 秒)。")
                     break
             
             if not login_success:
-                print("❌ 严重阻断：登录请求已发送但会话未发生流转。")
                 sb.save_screenshot("control_login_fail.png")
-                send_tg_message("❌", "面板登录失败", f"独立鉴权遭到拒绝，账号或密码无效。\n传入 ID: {CONTROL_ID}", "control_login_fail.png", target_email=CONTROL_ID)
+                send_tg_message("❌", "面板登录失败", f"鉴权遭到拒绝", "control_login_fail.png", target_email=CONTROL_ID)
                 return
         except Exception as e:
-            print(f"⚠️ 核心执行器抛出未捕获异常，面板通信中断: {e}")
+            print(f"⚠️ 执行器异常: {e}")
             return
 
-    # 状态机：鉴权成功后的服务器守护进程接管
-    print("⏳ 建立状态探针，等待面板初步加载...")
     time.sleep(6) 
     
-    # =================================================================
-    # 🌟 核心修复区：检测是否停留在列表页，若是则点击 Manage server 进入
-    # =================================================================
-    current_url = sb.get_current_url().lower()
-    # 如果 URL 中没有包含 /server/，说明停留在面板首页
-    if "/server/" not in current_url:
-        print("🔍 探针发现当前处于【服务器列表页 (Dashboard)】，正在下钻进入控制台...")
+    if "/server/" not in sb.get_current_url().lower():
         try:
-            # 优先匹配 Pterodactyl 默认的卡片超链接机制
             if sb.is_element_present('a[href*="/server/"]'):
                 sb.click('a[href*="/server/"]', timeout=8)
             else:
-                # 备选方案：精准击打截图中的 "Manage server" 按钮
                 sb.click('*:contains("Manage server")', timeout=8)
-            
-            print("✅ 成功点击进入服务器控制台，等待资源树加载...")
-            time.sleep(6)  # 给予 WebSocket 和控制台内部 UI 充分的加载时间
+            time.sleep(6) 
         except Exception as e:
-            print(f"⚠️ 无法自动下钻进入服务器详情页，可能会导致后续指令失效: {e}")
-    else:
-        print("✅ 当前已成功位于服务器控制台页面。")
-    # =================================================================
+            print(f"⚠️ 无法进入详情页: {e}")
 
-    print("🔍 扫描并同步远端容器运行指标 (State Tracking)...")
+    # ==========================================
+    # 修复核心：移除了下方原本冗余且破坏状态的重复代码段
+    # ==========================================
+    print("🔍 同步运行指标...")
     page_text = sb.get_text("body").lower()
     screenshot_file = "server_status.png"
     sb.save_screenshot(screenshot_file)
 
-    # 基于文本特征进行节点存活判定
     is_offline = "offline" in page_text or "离线" in page_text
+    is_starting = "starting" in page_text or "启动中" in page_text
     
+    # 增加状态保护：防止在“启动中”状态下错误地触发重启
+    if is_starting:
+        print("⏳ 服务器当前正处于【启动中】(Starting) 状态，跳过电源控制操作避免状态死锁。")
+        return
+        
     if is_offline:
-        print("💤 监控探针反馈：当前容器群集处于【休眠/离线】(Offline) 状态，将执行唤醒/开机初始化序列...")
+        print("💤 服务器【离线】(Offline)，执行开机...")
         try:
             sb.click('button:contains("Start"), button:contains("启动"), button[data-action="start"]', timeout=5)
-            print("✅ 【启动】(Power On) 硬件中断信号已下发至控制器。")
             time.sleep(3)
             sb.save_screenshot("server_started.png")
-            send_tg_message("🚀", "服务器实例唤醒", f"探针检测到实例离线，已执行强制开机操作。\n节点面板: {CONTROL_URL}", "server_started.png", target_email=CONTROL_ID)
+            send_tg_message("🚀", "实例唤醒", f"已执行开机。", "server_started.png", target_email=CONTROL_ID)
         except Exception as e:
-            print(f"⚠️ DOM 探针未能定位到合法的开机锚点坐标: {e}")
-            send_tg_message("⚠️", "唤醒序列失败", "在控制面板内未能解析出 Start/启动 组件节点", screenshot_file, target_email=CONTROL_ID)
+            send_tg_message("⚠️", "唤醒失败", "未能解析 Start 组件", screenshot_file, target_email=CONTROL_ID)
     else:
-        print("🟢 监控探针反馈：当前容器群集正处于【活跃运行】(Online) 状态，将分发重启周期指令以刷新存活心跳...")
+        print("🟢 服务器【运行】(Online)，执行刷新...")
         try:
             sb.click('button:contains("Restart"), button:contains("重启"), button[data-action="restart"]', timeout=5)
-            print("✅ 【软重启】(Graceful Restart) 信号已下发至控制器。")
             time.sleep(3)
             sb.save_screenshot("server_restarted.png")
-            send_tg_message("🔄", "服务器实例刷新", f"探针检测到实例存活，已执行续命重启操作。\n节点面板: {CONTROL_URL}", "server_restarted.png", target_email=CONTROL_ID)
+            send_tg_message("🔄", "实例刷新", f"已执行续命重启。", "server_restarted.png", target_email=CONTROL_ID)
         except Exception as e:
-            print(f"⚠️ DOM 探针未能定位到合法的重启锚点坐标: {e}")
-            send_tg_message("⚠️", "重启序列失败", "在控制面板内未能解析出 Restart/重启 组件节点", screenshot_file, target_email=CONTROL_ID)
+            send_tg_message("⚠️", "重启失败", "未能解析 Restart 组件", screenshot_file, target_email=CONTROL_ID)
 
-            
-    # 状态机：鉴权成功后的服务器守护进程接管
-    print("⏳ 建立状态探针，扫描并同步远端容器运行指标 (State Tracking)...")
-    time.sleep(8) 
-    
-    page_text = sb.get_text("body").lower()
-    screenshot_file = "server_status.png"
-    sb.save_screenshot(screenshot_file)
-
-    # 基于文本特征进行节点存活判定
-    is_offline = "offline" in page_text or "离线" in page_text
-    
-    if is_offline:
-        print("💤 监控探针反馈：当前容器群集处于【休眠/离线】(Offline) 状态，将执行唤醒/开机初始化序列...")
-        try:
-            sb.click('button:contains("Start"), button:contains("启动"), button[data-action="start"]', timeout=5)
-            print("✅ 【启动】(Power On) 硬件中断信号已下发至控制器。")
-            time.sleep(3)
-            sb.save_screenshot("server_started.png")
-            send_tg_message("🚀", "服务器实例唤醒", f"探针检测到实例离线，已执行强制开机操作。\n节点面板: {CONTROL_URL}", "server_started.png", target_email=CONTROL_ID)
-        except Exception as e:
-            print(f"⚠️ DOM 探针未能定位到合法的开机锚点坐标: {e}")
-            send_tg_message("⚠️", "唤醒序列失败", "在控制面板内未能解析出 Start/启动 组件节点", screenshot_file, target_email=CONTROL_ID)
-    else:
-        print("🟢 监控探针反馈：当前容器群集正处于【活跃运行】(Online) 状态，将分发重启周期指令以刷新存活心跳...")
-        try:
-            sb.click('button:contains("Restart"), button:contains("重启"), button[data-action="restart"]', timeout=5)
-            print("✅ 【软重启】(Graceful Restart) 信号已下发至控制器。")
-            time.sleep(3)
-            sb.save_screenshot("server_restarted.png")
-            send_tg_message("🔄", "服务器实例刷新", f"探针检测到实例存活，已执行续命重启操作。\n节点面板: {CONTROL_URL}", "server_restarted.png", target_email=CONTROL_ID)
-        except Exception as e:
-            print(f"⚠️ DOM 探针未能定位到合法的重启锚点坐标: {e}")
-            send_tg_message("⚠️", "重启序列失败", "在控制面板内未能解析出 Restart/重启 组件节点", screenshot_file, target_email=CONTROL_ID)
-
-#  脚本执行入口 
 def main():
-    print("#" * 25)
-    print("   katabump 自动登录续期与管理")
-    print("#" * 25)
-
+    print("#" * 25 + "\n   katabump 自动管理\n" + "#" * 25)
     IS_PROXY = os.environ.get("IS_PROXY", "false").lower() == "true"
     proxy_str = os.environ.get("PROXY_SERVER", "").strip() or "http://127.0.0.1:1081"
-    sb_kwargs = {"uc": True, "headless": False}
-
-    if IS_PROXY:
-        print(f"🔗 挂载代理: {proxy_str}")
-        sb_kwargs["proxy"] = proxy_str
-    else:
-        print("🌐 未使用代理，直连访问")
     
-    print("🚀 启动浏览器...")
-    with SB(**sb_kwargs) as sb:
-        try:
-            sb.open("https://api.ip.sb/ip")
-            print(f"📍  当前出口IP: {sb.get_text('body')}")
-        except Exception:
-            pass
+    # 优化点：利用 xvfb=True 代替外部依赖，提升 GitHub Actions 兼容性
+    sb_kwargs = {"uc": True, "headless": False, "xvfb": True}
 
+    if IS_PROXY: sb_kwargs["proxy"] = proxy_str
+    
+    with SB(**sb_kwargs) as sb:
         if login(sb):
             renew_server(sb)   
             manage_control_panel(sb)
         else:
-            print("\n❌ 登录失败，终止后续续期及控制面板操作。")
+            print("\n❌ 登录失败终止操作。")
 
 if __name__ == "__main__":
     main()
