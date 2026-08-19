@@ -25,8 +25,13 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-       
-
+        
+    - name: Install System Dependencies
+      timeout-minutes: 15 # 强制增加超时容忍度
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xdotool xvfb
+    
     - name: 🛠️ 安装系统与 Python 依赖
       run: |
         sudo apt-get update
