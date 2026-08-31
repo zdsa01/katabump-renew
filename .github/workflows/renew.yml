@@ -2,7 +2,8 @@ name: Katabump Auto Renew
 
 on:
   schedule:
-    - cron: '0 0 */2 * *'  # 每 2 天 UTC 0点 (北京时间 8点) 运行
+    - cron: '7 12 * * *'      # 北京时间晚上 20:07 (UTC+8)
+    - cron: '37 0 * * *'      # 北京时间早上 08:37 (UTC+8)
   workflow_dispatch:       # 允许手动触发
 
 concurrency:
