@@ -534,31 +534,69 @@ def _solve_altcha(sb) -> bool:
     return False
 
 
+def _days_until_expiry(expiry_str: str):
+    """计算距到期日的天数（北京时间）。负数表示已过期。返回 int 或 None。"""
+    if not expiry_str:
+        return None
+    try:
+        from datetime import datetime, timezone, timedelta
+        exp = datetime.strptime(expiry_str.strip()[:10], "%Y-%m-%d").date()
+        today = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
+        return (exp - today).days
+    except Exception:
+        return None
+
+
 def _submit_renew(sb):
     """
     提交续期：
-    1. 点击模态框内主按钮（可能显示 Renew / Confirm / Verifying...）
-    2. 等待 Verifying 进度结束或模态框关闭
+    - ALTCHA 通过后按钮常会自动进入 Verifying，此时不要再点
+    - 若仍显示 Renew/Confirm 则点击一次
+    - 等待模态框关闭（成功）或超时
     """
-    print("🖱️ 点击模态框中的确认/Renew 按钮...")
+    print("🖱️ 处理模态框确认按钮...")
 
-    # 优先点主按钮（排除 Close）
-    clicked = False
-    try:
-        btns = sb.find_elements('div.modal.show button')
-        for b in btns:
-            txt = (b.text or "").strip().lower()
-            if not txt or "close" in txt or "取消" in txt or "cancel" in txt:
-                continue
-            # Renew / Confirm / Verifying / 确认 等都尝试点击
-            print(f"🖱️ 点击按钮: [{b.text.strip()}]")
-            b.click()
-            clicked = True
-            break
-    except Exception as e:
-        print(f"⚠️ 按钮查找异常: {e}")
+    btn_text = sb.execute_script("""
+        (function(){
+            var m = document.querySelector('div.modal.show');
+            if (!m) return '';
+            var bs = m.querySelectorAll('button');
+            for (var i = 0; i < bs.length; i++) {
+                var t = (bs[i].textContent || '').trim();
+                if (t && !/close|cancel|取消/i.test(t)) return t;
+            }
+            return '';
+        })()
+    """) or ""
+    low = btn_text.lower()
 
-    if not clicked:
+    if "verifying" in low or "%" in btn_text:
+        print(f"ℹ️ 按钮已在验证中: [{btn_text}]，等待自动完成（不重复点击）")
+    elif any(k in low for k in ("renew", "confirm", "确认", "submit", "ok")):
+        print(f"🖱️ 点击确认按钮: [{btn_text}]")
+        try:
+            btns = sb.find_elements('div.modal.show button')
+            for b in btns:
+                t = (b.text or "").strip().lower()
+                if t and "close" not in t and "cancel" not in t and "取消" not in t:
+                    b.click()
+                    break
+        except Exception as e:
+            print(f"⚠️ 点击异常: {e}")
+            sb.execute_script("""
+                (function(){
+                    var m = document.querySelector('div.modal.show');
+                    if (!m) return;
+                    var bs = m.querySelectorAll('button');
+                    for (var i = 0; i < bs.length; i++) {
+                        var t = (bs[i].textContent || '').toLowerCase();
+                        if (t.includes('close') || t.includes('cancel') || t.includes('取消')) continue;
+                        bs[i].click(); return;
+                    }
+                })()
+            """)
+    else:
+        print(f"ℹ️ 当前按钮状态: [{btn_text or '无'}]，尝试 JS 点击主按钮")
         sb.execute_script("""
             (function(){
                 var m = document.querySelector('div.modal.show');
@@ -567,22 +605,23 @@ def _submit_renew(sb):
                 for (var i = 0; i < bs.length; i++) {
                     var t = (bs[i].textContent || '').toLowerCase();
                     if (t.includes('close') || t.includes('cancel') || t.includes('取消')) continue;
-                    bs[i].click();
-                    return;
+                    bs[i].click(); return;
                 }
             })()
         """)
-        print("🖱️ 已通过 JS 点击模态框主按钮")
 
-    # 等待验证进度（Verifying... 100%）完成或模态框关闭
-    print("⏳ 等待续期验证/提交完成...")
-    for i in range(20):
+    print("⏳ 等待续期提交完成（模态框关闭）...")
+    for i in range(25):
         time.sleep(1)
         try:
             modal_visible = sb.execute_script(
                 "return !!(document.querySelector('div.modal.show'));"
             )
-            btn_text = sb.execute_script("""
+            if not modal_visible:
+                print(f"✅ 模态框已关闭（耗时 {i+1}s），续期请求已提交")
+                return True
+
+            cur = sb.execute_script("""
                 (function(){
                     var m = document.querySelector('div.modal.show');
                     if (!m) return '';
@@ -594,16 +633,11 @@ def _submit_renew(sb):
                     return '';
                 })()
             """) or ""
-            if not modal_visible:
-                print(f"✅ 模态框已关闭（耗时 {i+1}s），续期请求已提交")
-                return
-            low = btn_text.lower()
-            if "verifying" in low or "%" in btn_text:
-                print(f"  …验证中: {btn_text}")
-                continue
-            # 按钮恢复为可点状态且模态仍在 → 再点一次
-            if any(k in low for k in ("renew", "confirm", "确认", "submit")):
-                print(f"🖱️ 再次点击: [{btn_text}]")
+            if "verifying" in cur.lower() or "%" in cur:
+                if i % 5 == 0:
+                    print(f"  …验证中: {cur}")
+            elif any(k in cur.lower() for k in ("renew", "confirm", "确认")):
+                print(f"🖱️ 按钮恢复，再次点击: [{cur}]")
                 try:
                     sb.find_element('div.modal.show button.btn-primary').click()
                 except Exception:
@@ -611,7 +645,8 @@ def _submit_renew(sb):
         except Exception:
             pass
 
-    print("⚠️ 等待超时，继续检查结果")
+    print("⚠️ 等待超时（模态框未关闭），可能未进入续期窗口或验证失败")
+    return False
 
 
 def _extract_expiry(sb) -> str:
@@ -619,7 +654,6 @@ def _extract_expiry(sb) -> str:
     try:
         expiry = sb.execute_script("""
         (function(){
-            // 1) 在 Service information 附近找 Expiry 标签
             var labels = document.querySelectorAll('div, span, td, th, label, p, dt, dd');
             for (var i = 0; i < labels.length; i++) {
                 var t = (labels[i].textContent || '').trim();
@@ -636,7 +670,6 @@ def _extract_expiry(sb) -> str:
                     }
                 }
             }
-            // 2) 正则兜底：Expiry 后面紧跟日期
             var body = document.body.innerText || '';
             var m = body.match(/Expir(?:y|ation|es)?\\s*[:：]?\\s*(\\d{4}-\\d{2}-\\d{2})/i);
             if (m) return m[1];
@@ -653,18 +686,15 @@ def _get_modal_or_toast_text(sb) -> str:
     try:
         text = sb.execute_script("""
         (function(){
-            // 优先模态框正文
             var modal = document.querySelector('div.modal.show .modal-body, div.modal.show');
             if (modal) {
                 var t = (modal.innerText || '').trim();
                 if (t) return t;
             }
-            // toast / alert
             var alerts = document.querySelectorAll('.toast, .alert, [role="alert"], .notification');
             for (var i = 0; i < alerts.length; i++) {
                 var a = (alerts[i].innerText || '').trim();
                 if (!a) continue;
-                // 过滤已知无关的 server type warning
                 if (/changing the server type/i.test(a)) continue;
                 if (/startup command and environment/i.test(a)) continue;
                 return a;
@@ -677,10 +707,9 @@ def _get_modal_or_toast_text(sb) -> str:
         return ""
 
 
-def _check_renew_result(sb, expiry_before: str = ""):
+def _check_renew_result(sb, expiry_before: str = "", skipped_early: bool = False):
     print("\n📋 检查续期结果...")
 
-    # 确保模态已关闭；若仍打开则点 Close 再刷新状态
     try:
         still_open = sb.execute_script("return !!(document.querySelector('div.modal.show'));")
         if still_open:
@@ -703,7 +732,6 @@ def _check_renew_result(sb, expiry_before: str = ""):
         pass
 
     time.sleep(2)
-    # 刷新页面以拿到最新 Expiry
     try:
         sb.refresh()
         time.sleep(4)
@@ -718,7 +746,6 @@ def _check_renew_result(sb, expiry_before: str = ""):
 
     tip = _get_modal_or_toast_text(sb)
     if tip:
-        # 截断过长文本
         tip = tip.replace("\n", " ").strip()
         if len(tip) > 180:
             tip = tip[:180] + "…"
@@ -727,9 +754,10 @@ def _check_renew_result(sb, expiry_before: str = ""):
     screenshot_file = "renew_result.png"
     sb.save_screenshot(screenshot_file)
 
-    # 判断成功：到期日比操作前更晚，或页面有成功关键词
+    days_left = _days_until_expiry(expiry_after or expiry_before)
+
     success = False
-    not_yet = False
+    not_yet = skipped_early
     if expiry_before and expiry_after and expiry_after > expiry_before:
         success = True
     if tip:
@@ -739,23 +767,34 @@ def _check_renew_result(sb, expiry_before: str = ""):
         elif any(k in low for k in ("renewed", "success", "extended", "extend the life", "已续期", "成功")):
             success = True
 
-    # 组装通知详情（不再把无关 Warning 当主文案）
     lines = []
     if tip and not re.search(r"changing the server type|startup command", tip, re.I):
         lines.append(tip)
-    if expiry_after:
-        lines.append(f"📅 下次到期时间: {expiry_after}")
-        if expiry_before and expiry_after != expiry_before:
+
+    ref_expiry = expiry_after or expiry_before
+    if ref_expiry:
+        lines.append(f"📅 当前到期时间: {ref_expiry}")
+        if expiry_before and expiry_after and expiry_after != expiry_before:
             lines.append(f"（续期前: {expiry_before} → 续期后: {expiry_after}）")
-        lines.append("请据此调整下次续期 cron")
+        if days_left is not None:
+            if days_left > 2:
+                from datetime import datetime, timedelta
+                exp = datetime.strptime(ref_expiry[:10], "%Y-%m-%d")
+                window_start = (exp - timedelta(days=2)).strftime("%Y-%m-%d")
+                lines.append(f"⏳ 续期窗口: {window_start} ~ {ref_expiry}（仅此 2 天内可续）")
+                lines.append(f"建议 cron 设在 {window_start} 或到期当天")
+            elif days_left >= 0:
+                lines.append(f"✅ 已进入续期窗口（剩余 {days_left} 天）")
+            else:
+                lines.append(f"⚠️ 已过期 {abs(days_left)} 天，请尽快续期（宽限约 1 天）")
+
     detail = "\n".join(lines) if lines else "未检测到明确提示"
 
-    if not_yet:
+    if not_yet or (days_left is not None and days_left > 2 and not success):
         send_tg_message("⏳", "未到续期时间", detail, screenshot_file, EMAIL)
     elif success:
         send_tg_message("✅", "续期成功", detail, screenshot_file, EMAIL)
     else:
-        # 已提交但无法确认是否延长了日期
         send_tg_message("ℹ️", "续期操作已执行", detail, screenshot_file, EMAIL)
 
 
@@ -766,10 +805,26 @@ def renew_server(sb):
     if not _goto_server_detail(sb):
         return
 
-    # 记录续期前的到期日，用于对比是否真正延长
     expiry_before = _extract_expiry(sb)
     if expiry_before:
         print(f"📅 续期前到期时间: {expiry_before}")
+        days = _days_until_expiry(expiry_before)
+        if days is not None:
+            print(f"📆 距到期还有 {days} 天")
+            # 官方政策：免费服务器仅到期前 2 天内（含到期日）可续期
+            if days > 2:
+                from datetime import datetime, timedelta
+                exp = datetime.strptime(expiry_before[:10], "%Y-%m-%d")
+                window_start = (exp - timedelta(days=2)).strftime("%Y-%m-%d")
+                print(f"⏳ 未进入续期窗口（仅 {window_start} ~ {expiry_before} 可续），跳过提交")
+                sb.save_screenshot("renew_too_early.png")
+                detail = (
+                    f"📅 当前到期时间: {expiry_before}\n"
+                    f"⏳ 续期窗口: {window_start} ~ {expiry_before}（仅此 2 天内可续）\n"
+                    f"建议将 GitHub Actions cron 设在 {window_start} 当天或到期前 1 天"
+                )
+                send_tg_message("⏳", "未到续期时间", detail, "renew_too_early.png", EMAIL)
+                return
 
     if not _open_renew_modal(sb):
         return
