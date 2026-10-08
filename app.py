@@ -551,6 +551,40 @@ def _submit_renew(sb):
     time.sleep(3)
 
 
+def _extract_expiry(sb) -> str:
+    """从服务器详情页提取 Expiry / 到期时间，用于确认下次续期时间。"""
+    try:
+        # 优先匹配页面上常见的 Expiry 标签旁的日期
+        expiry = sb.execute_script("""
+        (function(){
+            var texts = [];
+            var walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+            var node;
+            while (node = walk.nextNode()) {
+                var t = (node.textContent || '').trim();
+                if (t) texts.push(t);
+            }
+            for (var i = 0; i < texts.length; i++) {
+                if (/^expir(y|ation|es)?$/i.test(texts[i]) || texts[i] === '到期' || texts[i] === '到期时间') {
+                    // 取紧邻的下一个非空文本
+                    for (var j = i + 1; j < Math.min(i + 5, texts.length); j++) {
+                        if (/\\d{4}-\\d{2}-\\d{2}/.test(texts[j])) return texts[j];
+                    }
+                }
+            }
+            // 兜底：任意 YYYY-MM-DD 且附近有 period/days 等关键词
+            var body = document.body.innerText || '';
+            var m = body.match(/Expir(?:y|ation|es)?\\s*[:：]?\\s*(\\d{4}-\\d{2}-\\d{2})/i);
+            if (m) return m[1];
+            m = body.match(/(\\d{4}-\\d{2}-\\d{2})/);
+            return m ? m[1] : '';
+        })()
+        """)
+        return (expiry or "").strip()
+    except Exception:
+        return ""
+
+
 def _check_renew_result(sb):
     print("\n📋 检查续期结果...")
     alert_text = _read_alert(sb)
@@ -558,21 +592,33 @@ def _check_renew_result(sb):
         time.sleep(3)
         alert_text = _read_alert(sb)
 
+    # 等待页面刷新后提取最新到期时间
+    time.sleep(2)
+    expiry = _extract_expiry(sb)
+    if expiry:
+        print(f"📅 检测到下次到期时间: {expiry}")
+    else:
+        print("ℹ️ 未能从页面解析出到期时间")
+
     screenshot_file = "renew_result.png"
     sb.save_screenshot(screenshot_file)
+
+    detail = alert_text or "未检测到明确提示"
+    if expiry:
+        detail = f"{detail}\n📅 下次到期时间: {expiry}（请据此调整下次续期 cron）"
 
     if alert_text:
         print(f"📩 页面提示: {alert_text}")
         low = alert_text.lower()
         if "can't renew" in low or "unable" in low:
-            send_tg_message("⏳", "未到续期时间", alert_text, screenshot_file, EMAIL)
+            send_tg_message("⏳", "未到续期时间", detail, screenshot_file, EMAIL)
         elif any(kw in low for kw in ("renewed", "success", "extended")):
-            send_tg_message("✅", "续期成功", alert_text, screenshot_file, EMAIL)
+            send_tg_message("✅", "续期成功", detail, screenshot_file, EMAIL)
         else:
-            send_tg_message("ℹ️", "续期操作已执行", alert_text, screenshot_file, EMAIL)
+            send_tg_message("ℹ️", "续期操作已执行", detail, screenshot_file, EMAIL)
     else:
         print("ℹ️ 未检测到明确的提示框，可能续期操作未生效")
-        send_tg_message("ℹ️", "续期操作已执行", "未检测到明确提示", screenshot_file, EMAIL)
+        send_tg_message("ℹ️", "续期操作已执行", detail, screenshot_file, EMAIL)
 
 
 def renew_server(sb):
@@ -708,20 +754,9 @@ def manage_control_panel(sb):
                             "在控制面板内未能解析出 Start/启动 组件节点",
                             screenshot_file, target_email=CONTROL_ID)
     else:
-        print("🟢 服务器处于 Online 状态 → 执行重启")
-        try:
-            sb.click('button:contains("Restart"), button:contains("重启"), button[data-action="restart"]', timeout=5)
-            print("✅ 重启指令已发送")
-            time.sleep(3)
-            sb.save_screenshot("server_restarted.png")
-            send_tg_message("🔄", "服务器实例刷新",
-                            f"探针检测到实例存活，已执行续命重启操作。\n节点面板: {CONTROL_URL}",
-                            "server_restarted.png", target_email=CONTROL_ID)
-        except Exception as e:
-            print(f"⚠️ 未能找到 Restart 按钮: {e}")
-            send_tg_message("⚠️", "重启序列失败",
-                            "在控制面板内未能解析出 Restart/重启 组件节点",
-                            screenshot_file, target_email=CONTROL_ID)
+        # 在线时不执行重启，仅记录状态，避免不必要的中断
+        print("🟢 服务器处于 Online 状态 → 跳过重启（仅离线时才启动）")
+        sb.save_screenshot(screenshot_file)
 
 
 # ------------------------------------------------------------------
