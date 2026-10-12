@@ -2,8 +2,9 @@ name: Katabump Auto Renew
 
 on:
   schedule:
-    - cron: '7 12 * * *'      # 北京时间晚上 20:07 (UTC+8)
-    - cron: '37 0 * * *'      # 北京时间早上 08:37 (UTC+8)
+    # 每天北京时间 12:00（UTC 04:00）
+    # 脚本自动读 Expiry，只有「到期前 2 天内」才续期，其它天直接跳过
+    - cron: '0 4 * * *'
   workflow_dispatch:       # 允许手动触发
 
 concurrency:
