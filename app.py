@@ -151,18 +151,17 @@ _ALTCHA_EXPAND_JS = """
 _ALTCHA_SOLVED_JS = """
 (function(){
     var modal = document.querySelector('div.modal.show') || document;
+    // 真正验证通过：hidden input 有足够长的 payload
     var inputs = modal.querySelectorAll('input[type="hidden"]');
     for (var i = 0; i < inputs.length; i++) {
         var n = (inputs[i].name || '').toLowerCase();
         if ((n.includes('altcha') || n.includes('captcha')) &&
-            inputs[i].value && inputs[i].value.length > 20) return true;
+            inputs[i].value && inputs[i].value.length > 40) return true;
     }
-    var cbs = modal.querySelectorAll('input[type="checkbox"]');
-    for (var j = 0; j < cbs.length; j++) {
-        if (cbs[j].disabled) return true;
-    }
-    var w = modal.querySelector('[data-state="verified"],.altcha--verified,.altcha-verified');
+    // ALTCHA 组件显式 verified 状态
+    var w = modal.querySelector('[data-state="verified"], .altcha--verified, .altcha-verified, altcha-widget[data-state="verified"]');
     if (w) return true;
+    // 复选框被勾选且 disabled（仅作为弱信号，需配合 payload）
     return false;
 })()
 """
@@ -450,26 +449,44 @@ def _open_renew_modal(sb) -> bool:
 
 
 def _solve_altcha(sb) -> bool:
+    """点击 ALTCHA 复选框并等待 proof-of-work 真正完成。"""
     print("\n🔐 处理 ALTCHA 人机验证...")
     time.sleep(2)
+
     if sb.execute_script(_ALTCHA_SOLVED_JS):
-        print("✅ ALTCHA 已自动通过")
+        print("✅ ALTCHA 已自动通过（检测到有效 payload）")
         return True
 
-    coords = None
+    # 1) 优先点击 div.altcha 内的 checkbox（与成功脚本一致）
+    clicked = False
     try:
-        coords = sb.execute_script(_ALTCHA_EXPAND_JS)
-    except Exception:
-        pass
+        cbs = sb.find_elements("css selector", "div.modal.show div.altcha input[type='checkbox'], div.modal.show altcha-widget input[type='checkbox'], div.modal.show input[type='checkbox'][required]")
+        for cb in cbs:
+            try:
+                sb.execute_script("arguments[0].scrollIntoView({block:'center'});", cb)
+                time.sleep(0.3)
+                cb.click()
+                print("✅ 已点击 ALTCHA 复选框")
+                clicked = True
+                break
+            except Exception:
+                try:
+                    sb.execute_script("arguments[0].click();", cb)
+                    print("✅ 已通过 JS 点击 ALTCHA 复选框")
+                    clicked = True
+                    break
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"⚠️ 查找 ALTCHA checkbox 异常: {e}")
 
-    if coords:
-        print(f"📍 找到模态框内 iframe 坐标: ({coords['cx']}, {coords['cy']})")
-
-    for attempt in range(3):
-        if sb.execute_script(_ALTCHA_SOLVED_JS):
-            print(f"✅ ALTCHA 验证通过（第 {attempt + 1} 轮）")
-            return True
-
+    # 2) 兜底：iframe / 坐标点击
+    if not clicked:
+        coords = None
+        try:
+            coords = sb.execute_script(_ALTCHA_EXPAND_JS)
+        except Exception:
+            pass
         if coords:
             try:
                 wi = sb.execute_script(_WININFO_JS)
@@ -478,18 +495,9 @@ def _solve_altcha(sb) -> bool:
             bar = wi["oh"] - wi["ih"]
             ax = coords["cx"] + wi["sx"]
             ay = coords["cy"] + wi["sy"] + bar
-            print(f"🖱️ ALTCHA点击复选框 ({ax}, {ay})")
+            print(f"🖱️ ALTCHA 坐标点击 ({ax}, {ay})")
             _xdotool_click(ax, ay)
-
-        try:
-            for iframe in sb.find_elements('div.modal.show iframe'):
-                try:
-                    iframe.click()
-                    print("🖱️ SeleniumBase 点击模态框 iframe")
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            clicked = True
 
         sb.execute_script("""
             (function(){
@@ -500,12 +508,8 @@ def _solve_altcha(sb) -> bool:
                     iframes[i].click();
                     iframes[i].dispatchEvent(new MouseEvent('click', {bubbles:true}));
                 }
-                var labels = modal.querySelectorAll('label');
-                for (var j = 0; j < labels.length; j++) {
-                    var txt = (labels[j].textContent || '').toLowerCase();
-                    if (txt.includes('robot') || txt.includes('captcha') || txt.includes('verify'))
-                        labels[j].click();
-                }
+                var labels = modal.querySelectorAll('label, .altcha, altcha-widget');
+                for (var j = 0; j < labels.length; j++) labels[j].click();
                 var cbs = modal.querySelectorAll('input[type="checkbox"]');
                 for (var k = 0; k < cbs.length; k++) {
                     if (!cbs[k].disabled) {
@@ -516,136 +520,165 @@ def _solve_altcha(sb) -> bool:
             })()
         """)
 
-        for _ in range(6):
-            time.sleep(1)
-            if sb.execute_script(_ALTCHA_SOLVED_JS):
-                print(f"✅ ALTCHA 验证通过（第 {attempt + 1} 轮）")
-                return True
-
-        print(f"⚠️ 第 {attempt + 1} 轮未通过，重试...")
+    # 3) 等待 PoW 完成（最长约 20 秒）
+    print("⏳ 等待 ALTCHA proof-of-work 完成...")
+    for i in range(20):
+        time.sleep(1)
+        if sb.execute_script(_ALTCHA_SOLVED_JS):
+            print(f"✅ ALTCHA 验证通过（耗时 {i+1}s）")
+            return True
+        # 观察按钮状态
         try:
-            new_coords = sb.execute_script(_ALTCHA_EXPAND_JS)
-            if new_coords:
-                coords = new_coords
+            st = sb.execute_script("""
+                (function(){
+                    var m = document.querySelector('div.modal.show');
+                    if (!m) return '';
+                    var w = m.querySelector('[data-state], .altcha, altcha-widget');
+                    if (w) return (w.getAttribute('data-state') || '') + '|' + (w.className || '');
+                    return '';
+                })()
+            """) or ""
+            if i % 4 == 0 and st:
+                print(f"  …ALTCHA 状态: {st[:80]}")
         except Exception:
             pass
 
-    print("❌ ALTCHA 3 轮均失败")
+    print("⚠️ ALTCHA 等待超时，仍尝试提交")
     return False
-
-
-def _days_until_expiry(expiry_str: str):
-    """计算距到期日的天数（北京时间）。负数表示已过期。返回 int 或 None。"""
-    if not expiry_str:
-        return None
-    try:
-        from datetime import datetime, timezone, timedelta
-        exp = datetime.strptime(expiry_str.strip()[:10], "%Y-%m-%d").date()
-        today = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
-        return (exp - today).days
-    except Exception:
-        return None
 
 
 def _submit_renew(sb):
     """
     提交续期：
-    - ALTCHA 通过后按钮常会自动进入 Verifying，此时不要再点
-    - 若仍显示 Renew/Confirm 则点击一次
-    - 等待模态框关闭（成功）或超时
+    1. 优先点击 renew-modal 内 type=submit 且文案含 Renew 的按钮
+    2. 若按钮处于 Verifying，等待其变为可点或模态关闭
+    3. 超时则用 form.submit / 再点一次
     """
-    print("🖱️ 处理模态框确认按钮...")
+    print("🖱️ 处理模态框确认/提交...")
 
-    btn_text = sb.execute_script("""
-        (function(){
-            var m = document.querySelector('div.modal.show');
-            if (!m) return '';
-            var bs = m.querySelectorAll('button');
-            for (var i = 0; i < bs.length; i++) {
-                var t = (bs[i].textContent || '').trim();
-                if (t && !/close|cancel|取消/i.test(t)) return t;
-            }
-            return '';
-        })()
-    """) or ""
-    low = btn_text.lower()
-
-    if "verifying" in low or "%" in btn_text:
-        print(f"ℹ️ 按钮已在验证中: [{btn_text}]，等待自动完成（不重复点击）")
-    elif any(k in low for k in ("renew", "confirm", "确认", "submit", "ok")):
-        print(f"🖱️ 点击确认按钮: [{btn_text}]")
-        try:
-            btns = sb.find_elements('div.modal.show button')
-            for b in btns:
-                t = (b.text or "").strip().lower()
-                if t and "close" not in t and "cancel" not in t and "取消" not in t:
-                    b.click()
-                    break
-        except Exception as e:
-            print(f"⚠️ 点击异常: {e}")
-            sb.execute_script("""
-                (function(){
-                    var m = document.querySelector('div.modal.show');
-                    if (!m) return;
-                    var bs = m.querySelectorAll('button');
-                    for (var i = 0; i < bs.length; i++) {
-                        var t = (bs[i].textContent || '').toLowerCase();
-                        if (t.includes('close') || t.includes('cancel') || t.includes('取消')) continue;
-                        bs[i].click(); return;
-                    }
-                })()
-            """)
-    else:
-        print(f"ℹ️ 当前按钮状态: [{btn_text or '无'}]，尝试 JS 点击主按钮")
-        sb.execute_script("""
+    def _btn_info():
+        return sb.execute_script("""
             (function(){
-                var m = document.querySelector('div.modal.show');
-                if (!m) return;
+                var m = document.querySelector('div.modal.show') || document.querySelector('#renew-modal');
+                if (!m) return {text:'', type:'', disabled:true, exists:false};
                 var bs = m.querySelectorAll('button');
                 for (var i = 0; i < bs.length; i++) {
-                    var t = (bs[i].textContent || '').toLowerCase();
-                    if (t.includes('close') || t.includes('cancel') || t.includes('取消')) continue;
-                    bs[i].click(); return;
+                    var t = (bs[i].textContent || '').trim();
+                    if (!t || /close|cancel|取消/i.test(t)) continue;
+                    return {
+                        text: t,
+                        type: (bs[i].getAttribute('type') || ''),
+                        disabled: !!bs[i].disabled,
+                        exists: true
+                    };
+                }
+                return {text:'', type:'', disabled:true, exists:false};
+            })()
+        """) or {"text": "", "type": "", "disabled": True, "exists": False}
+
+    def _click_submit():
+        # 与成功脚本一致：#renew-modal button[type=submit] 含 Renew
+        ok = sb.execute_script("""
+            (function(){
+                var m = document.querySelector('#renew-modal') || document.querySelector('div.modal.show');
+                if (!m) return false;
+                var bs = m.querySelectorAll('button[type="submit"], button.btn-primary, button');
+                for (var i = 0; i < bs.length; i++) {
+                    var t = (bs[i].textContent || '').trim();
+                    if (!t || /close|cancel|取消/i.test(t)) continue;
+                    // 跳过纯 Verifying 进度中且 disabled 的
+                    if (/verifying/i.test(t) && bs[i].disabled) continue;
+                    bs[i].scrollIntoView({block:'center'});
+                    bs[i].click();
+                    return true;
+                }
+                // 最后兜底：表单 submit
+                var form = m.querySelector('form');
+                if (form) { form.requestSubmit ? form.requestSubmit() : form.submit(); return true; }
+                return false;
+            })()
+        """)
+        return bool(ok)
+
+    info = _btn_info()
+    print(f"ℹ️ 当前按钮: text=[{info.get('text','')}] type=[{info.get('type','')}] disabled={info.get('disabled')}")
+
+    # 若已是 Verifying，先多等几秒让 PoW 收尾
+    t = (info.get("text") or "").lower()
+    if "verifying" in t or "%" in (info.get("text") or ""):
+        print("⏳ 按钮处于 Verifying，额外等待 ALTCHA 完成...")
+        for i in range(12):
+            time.sleep(1)
+            if sb.execute_script(_ALTCHA_SOLVED_JS):
+                print(f"✅ payload 已就绪（+{i+1}s）")
+                break
+            info = _btn_info()
+            t = (info.get("text") or "").lower()
+            if not info.get("exists"):
+                print("✅ 模态框已消失")
+                return True
+            if "verifying" not in t and "%" not in (info.get("text") or ""):
+                break
+
+    # 点击提交
+    if _click_submit():
+        print("🖱️ 已点击提交按钮")
+    else:
+        print("⚠️ 未找到可点的提交按钮，尝试 JS 强制提交")
+        sb.execute_script("""
+            (function(){
+                var m = document.querySelector('#renew-modal') || document.querySelector('div.modal.show');
+                if (!m) return;
+                var form = m.querySelector('form');
+                if (form) { form.requestSubmit ? form.requestSubmit() : form.submit(); return; }
+                var bs = m.querySelectorAll('button');
+                for (var i = 0; i < bs.length; i++) {
+                    if (!/close|cancel|取消/i.test(bs[i].textContent || '')) { bs[i].click(); return; }
                 }
             })()
         """)
 
     print("⏳ 等待续期提交完成（模态框关闭）...")
-    for i in range(25):
+    for i in range(30):
         time.sleep(1)
         try:
             modal_visible = sb.execute_script(
-                "return !!(document.querySelector('div.modal.show'));"
+                "return !!(document.querySelector('div.modal.show') || document.querySelector('#renew-modal.show'));"
             )
             if not modal_visible:
                 print(f"✅ 模态框已关闭（耗时 {i+1}s），续期请求已提交")
                 return True
 
-            cur = sb.execute_script("""
-                (function(){
-                    var m = document.querySelector('div.modal.show');
-                    if (!m) return '';
-                    var bs = m.querySelectorAll('button');
-                    for (var i = 0; i < bs.length; i++) {
-                        var t = (bs[i].textContent || '').trim();
-                        if (t && !/close|cancel|取消/i.test(t)) return t;
-                    }
-                    return '';
-                })()
-            """) or ""
-            if "verifying" in cur.lower() or "%" in cur:
-                if i % 5 == 0:
-                    print(f"  …验证中: {cur}")
-            elif any(k in cur.lower() for k in ("renew", "confirm", "确认")):
-                print(f"🖱️ 按钮恢复，再次点击: [{cur}]")
-                try:
-                    sb.find_element('div.modal.show button.btn-primary').click()
-                except Exception:
-                    pass
+            info = _btn_info()
+            cur = info.get("text") or ""
+            low = cur.lower()
+            if i % 5 == 0:
+                print(f"  …按钮状态: [{cur}]")
+
+            # 按钮恢复为 Renew 可点 → 再点
+            if any(k in low for k in ("renew", "confirm", "确认", "submit")) and "verifying" not in low:
+                if not info.get("disabled"):
+                    print(f"🖱️ 按钮可点，再次提交: [{cur}]")
+                    _click_submit()
+            # 长时间卡在 Verifying 100% → 强制 form submit
+            if i in (12, 20) and ("verifying" in low or "%" in cur):
+                print("🖱️ Verifying 超时，强制 form.submit()")
+                sb.execute_script("""
+                    (function(){
+                        var m = document.querySelector('#renew-modal') || document.querySelector('div.modal.show');
+                        if (!m) return;
+                        var form = m.querySelector('form');
+                        if (form) { form.requestSubmit ? form.requestSubmit() : form.submit(); }
+                        else {
+                            var bs = m.querySelectorAll('button[type="submit"], button.btn-primary');
+                            for (var i = 0; i < bs.length; i++) bs[i].click();
+                        }
+                    })()
+                """)
         except Exception:
             pass
 
-    print("⚠️ 等待超时（模态框未关闭），可能未进入续期窗口或验证失败")
+    print("⚠️ 等待超时（模态框未关闭）")
     return False
 
 
