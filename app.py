@@ -682,6 +682,19 @@ def _submit_renew(sb):
     return False
 
 
+def _days_until_expiry(expiry_str: str):
+    """计算距到期日的天数（北京时间）。负数表示已过期。返回 int 或 None。"""
+    if not expiry_str:
+        return None
+    try:
+        from datetime import datetime, timezone, timedelta
+        exp = datetime.strptime(expiry_str.strip()[:10], "%Y-%m-%d").date()
+        today = (datetime.now(timezone.utc) + timedelta(hours=8)).date()
+        return (exp - today).days
+    except Exception:
+        return None
+
+
 def _extract_expiry(sb) -> str:
     """从服务器详情页 Service information 区域精确提取 Expiry 日期。"""
     try:
